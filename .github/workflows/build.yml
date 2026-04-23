@@ -1,12 +1,7 @@
-name: QamarOS Zero Errors Stable Build
+name: Badr OS 2.0 ISO (Live + Stable v4.6 FIXED)
 
 on:
   workflow_dispatch:
-    inputs:
-      password:
-        description: 'Admin password'
-        required: false
-        default: 'liveuser'
 
 jobs:
   build:
@@ -23,24 +18,34 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
             grub-common mtools wget cpio util-linux busybox-static \
-            ca-certificates dosfstools rsync
+            ca-certificates dosfstools
 
       # ================= ROOTFS =================
       - name: Download Alpine rootfs
         run: |
           wget -q -O rootfs.tar.gz \
             https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
-          mkdir rootfs
+          mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
       # ================= CHROOT BUILD =================
-      - name: Build system
+      - name: Build system in chroot
         run: |
-          for d in proc sys dev; do
+          set -e
+
+          for d in proc sys dev run; do
+            sudo mkdir -p rootfs/$d
             sudo mount --bind /$d rootfs/$d
           done
 
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+
+          cleanup() {
+            for d in run dev sys proc; do
+              sudo umount -lf rootfs/$d 2>/dev/null || true
+            done
+          }
+          trap cleanup EXIT
 
           sudo chroot rootfs /bin/sh -ex << 'CHROOT'
 
@@ -52,99 +57,111 @@ jobs:
           apk update
 
           apk add --no-cache \
-            alpine-base linux-lts openrc bash doas \
-            eudev dbus elogind connman \
-            seatd wpa_supplicant \
-            labwc waybar foot wofi thunar firefox \
-            pipewire pipewire-pulse wireplumber \
-            mesa-dri-gallium font-noto zram-init \
-            htop neofetch
+            linux-lts linux-firmware alpine-base openrc bash doas \
+            dbus elogind connman seatd util-linux \
+            labwc waybar foot wofi thunar firefox mesa-dri-gallium font-noto squashfs-tools
 
-          # ================= USER =================
-          adduser -D -s /bin/bash admin
-          echo "admin:${{ inputs.password }}" | chpasswd
-          passwd -l root
+          # services
+          rc-update add dbus default
+          rc-update add elogind default
+          rc-update add connman default
+          rc-update add seatd default
 
-          for g in wheel audio video seat input netdev; do
-            addgroup admin $g 2>/dev/null || true
-          done
+          # user
+          adduser -D admin
+          addgroup admin wheel
+          passwd -d admin
 
           echo "permit persist :wheel" > /etc/doas.conf
 
-          # ================= SERVICES =================
-          rc-update add udev sysinit
-          rc-update add dbus boot
-          rc-update add elogind default
-          rc-update add seatd default
-          rc-update add connman default
-          rc-update add zram-init default
-
-          # ================= ZRAM =================
-          echo 'zram_size="40%"' > /etc/conf.d/zram-init
-          echo 'zram_algorithm="zstd"' >> /etc/conf.d/zram-init
-
-          # ================= SECURITY =================
-          cat > /etc/sysctl.d/qamar.conf << 'EOF'
-kernel.kptr_restrict=2
-kernel.dmesg_restrict=1
-kernel.randomize_va_space=2
-fs.protected_symlinks=1
-fs.protected_hardlinks=1
-EOF
-
-          # ================= INITRAMFS =================
+          # kernel modules
           KVER=$(ls /lib/modules | sort -V | tail -1)
-          depmod -a "$KVER"
-          mkinitfs -o /boot/initramfs-qamar "$KVER"
+          [ -n "$KVER" ] && depmod -a "$KVER" || true
+
+          # GUI autostart
+          cat > /etc/profile.d/gui.sh << 'EOF'
+          if [ "$(tty)" = "/dev/tty1" ]; then
+            exec dbus-run-session labwc
+          fi
+          EOF
+          chmod +x /etc/profile.d/gui.sh
 
           rm -rf /var/cache/apk/*
           CHROOT
 
-          for d in proc sys dev; do
+      # ================= CLEAN =================
+      - name: Clean virtual FS
+        run: |
+          for d in run dev sys proc; do
             sudo umount -lf rootfs/$d 2>/dev/null || true
           done
+          sudo rm -rf rootfs/proc rootfs/sys rootfs/dev rootfs/run
 
-      # ================= CLEAN VIRTUAL FS =================
-      - name: Clean rootfs
+      # ================= KERNEL =================
+      - name: Prepare kernel
         run: |
-          sudo rm -rf rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp 2>/dev/null || true
-          sudo mkdir -p rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp
-          sudo chmod 1777 rootfs/tmp
+          mkdir -p iso_root/boot iso_root/EFI/BOOT
 
-      # ================= CREATE CLEAN ROOTFS =================
-      - name: Create clean rootfs (FIX PROC ISSUE)
+          KERNEL=$(ls rootfs/boot/vmlinuz-* | sort -V | tail -1)
+          sudo cp "$KERNEL" iso_root/boot/vmlinuz
+
+      # ================= INITRAMFS (FIXED LIVE BOOT) =================
+      - name: Build initramfs
         run: |
-          sudo rsync -a --delete \
-            --exclude='proc' \
-            --exclude='sys' \
-            --exclude='dev' \
-            --exclude='run' \
-            --exclude='tmp' \
-            --exclude='var/run' \
-            rootfs/ clean_rootfs/
+          mkdir -p initramfs/bin initramfs/dev initramfs/proc initramfs/sys initramfs/newroot
 
-          sudo rm -rf clean_rootfs/proc clean_rootfs/sys clean_rootfs/dev 2>/dev/null || true
-          sudo rm -rf clean_rootfs/run clean_rootfs/tmp 2>/dev/null || true
+          cp "$(which busybox)" initramfs/bin/
 
-          sudo mkdir -p clean_rootfs/proc clean_rootfs/sys clean_rootfs/dev
-          sudo mkdir -p clean_rootfs/run clean_rootfs/tmp
-          sudo chmod 1777 clean_rootfs/tmp
+          cd initramfs
+          for c in sh mount cat ls awk grep umount chroot mkdir; do
+            ln -s busybox bin/$c
+          done
+
+          cat > init << 'EOF'
+#!/bin/busybox sh
+
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+
+echo "[Badr OS] Starting Live Boot..."
+
+modprobe squashfs 2>/dev/null
+
+ROOTFS="/badr.squashfs"
+
+if [ ! -f "$ROOTFS" ]; then
+  for m in $(cat /proc/mounts | awk '{print $2}'); do
+    if [ -f "$m/badr.squashfs" ]; then
+      ROOTFS="$m/badr.squashfs"
+      break
+    fi
+  done
+fi
+
+if [ ! -f "$ROOTFS" ]; then
+  echo "ERROR: squashfs not found"
+  exec sh
+fi
+
+mkdir -p /newroot
+
+mount -t squashfs "$ROOTFS" /newroot || mount -o loop,ro "$ROOTFS" /newroot
+
+exec switch_root /newroot /sbin/init
+EOF
+
+          chmod +x init
+
+          find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
+          cd ..
 
       # ================= SQUASHFS =================
       - name: Build squashfs
         run: |
-          mkdir -p iso_root/boot
-
-          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz 2>/dev/null || true
-          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs 2>/dev/null || true
-
-          sudo mksquashfs clean_rootfs iso_root/qamar.squashfs \
-            -comp zstd \
-            -b 1M \
-            -Xcompression-level 6 \
-            -processors $(nproc) \
-            -noappend \
-            -quiet
+          sudo mksquashfs rootfs iso_root/badr.squashfs \
+            -e proc sys dev run tmp var/run \
+            -comp zstd -b 1M -processors $(nproc) -noappend
 
       # ================= GRUB =================
       - name: GRUB config
@@ -155,32 +172,44 @@ EOF
 set timeout=3
 set default=0
 
-menuentry "QamarOS Stable" {
-    linux /boot/vmlinuz quiet root=LABEL=QAMAR_OS
+menuentry "Badr OS 2.0 Live Stable" {
+    linux /boot/vmlinuz quiet
     initrd /boot/initramfs
 }
 EOF
 
       # ================= BIOS =================
-      - name: BIOS boot
+      - name: BIOS bootloader
         run: |
           grub-mkstandalone --format=i386-pc \
             --output=iso_root/boot/grub/eltorito.img \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
 
-      # ================= ISO =================
+      # ================= UEFI =================
+      - name: UEFI bootloader
+        run: |
+          grub-mkstandalone --format=x86_64-efi \
+            --output=iso_root/EFI/BOOT/BOOTX64.EFI \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+
+      # ================= ISO BUILD =================
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "QAMAR_OS" \
+            -volid "BADR_OS" \
+            -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
-            -output QamarOS.iso iso_root
+            -eltorito-alt-boot \
+            -e EFI/BOOT/BOOTX64.EFI \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output BadrOS.iso iso_root
 
       # ================= UPLOAD =================
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: QamarOS-Zero-Errors
-          path: QamarOS.iso
+          name: Badr-OS-2.0-Live-Stable-FIXED
+          path: BadrOS.iso
           retention-days: 7
