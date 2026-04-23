@@ -1,6 +1,8 @@
-name: ZenithOS Final Stable
+name: ZenithOS Final Auto
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -26,7 +28,7 @@ jobs:
           mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      - name: Build system inside chroot
+      - name: Build system in chroot
         run: |
           set -e
           for d in proc sys dev run; do
@@ -77,27 +79,20 @@ chown admin:admin /home/admin/.profile
 rm -rf /var/cache/apk/*
 CHROOT
 
-      - name: Cleanup mounts and create clean rootfs
+      - name: Clean rootfs with rsync
         run: |
-          # فصل كل المجلدات الوهمية
           for d in run dev sys proc; do
             sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
           done
-          # إنشاء rootfs نظيف خالٍ تماماً من proc/sys/dev/run/tmp
           sudo rm -rf rootfs_clean
           sudo rsync -a \
-            --exclude proc \
-            --exclude sys \
-            --exclude dev \
-            --exclude run \
-            --exclude tmp \
+            --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp \
             rootfs/ rootfs_clean/
 
       - name: Build squashfs
         run: |
           sudo mksquashfs rootfs_clean iso_root/zenith.squashfs \
-            -noappend -comp zstd -Xcompression-level 3 \
-            -processors $(nproc) -quiet
+            -noappend -comp zstd -Xcompression-level 3 -processors $(nproc) -quiet
 
       - name: Copy kernel
         run: |
@@ -108,10 +103,10 @@ CHROOT
 
       - name: Build initramfs
         run: |
-          mkdir -p initramfs/bin initramfs/newroot
+          mkdir -p initramfs/bin
           cp "$(which busybox)" initramfs/bin/
           cd initramfs
-          for c in sh mount cat ls awk grep umount switch_root mkdir sleep; do
+          for c in sh mount cat ls grep umount switch_root mkdir sleep; do
             ln -s busybox bin/$c
           done
           cat > init << 'EOF'
@@ -120,7 +115,6 @@ mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev
 echo "[ZenithOS] Booting..."
-sleep 1
 mkdir -p /media /newroot
 SQUASH=""
 for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
@@ -142,14 +136,13 @@ EOF
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      - name: GRUB setup
+      - name: GRUB
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
 set timeout=3
-set default=0
-menuentry "ZenithOS Final" {
-    linux /boot/vmlinuz quiet loglevel=3
+menuentry "ZenithOS" {
+    linux /boot/vmlinuz quiet
     initrd /boot/initramfs
 }
 EOF
@@ -167,7 +160,7 @@ EOF
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "ZENITH_FINAL" -iso-level 3 \
+            -volid "ZENITH_FIX" -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
@@ -176,9 +169,8 @@ EOF
             -isohybrid-gpt-basdat \
             -output ZenithOS.iso iso_root
 
-      - name: Upload ISO
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ZenithOS-Final-Stable
+          name: ZenithOS-Fixed
           path: ZenithOS.iso
-          retention-days: 7
