@@ -1,4 +1,4 @@
-name: ZenithOS Final Fix
+name: ZenithOS Stable Build (no heredoc)
 
 on:
   push:
@@ -31,14 +31,13 @@ jobs:
       - name: Build system in chroot
         run: |
           set -e
-          # Mount virtual filesystems
           for d in proc sys dev run; do
             sudo mkdir -p rootfs/$d
             sudo mount --bind /$d rootfs/$d
           done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
-          # Prepare build script without ANY heredoc inside YAML
+          # كتابة سكريبت البناء باستخدام printf بدون heredoc
           printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
@@ -47,7 +46,7 @@ jobs:
           printf 'rc-update add dbus default\nrc-update add elogind default\nrc-update add connman default\nrc-update add seatd default\n' | sudo tee -a rootfs/build.sh
           printf 'adduser -D admin\naddgroup admin wheel\npasswd -d admin\necho "permit persist :wheel" > /etc/doas.conf\n' | sudo tee -a rootfs/build.sh
           printf "echo 'agetty_options=\"--autologin admin --noclear\"' > /etc/conf.d/agetty.tty1\n" | sudo tee -a rootfs/build.sh
-          printf "cat > /home/admin/.profile << 'EOF'\nif [ \"\$(tty)\" = \"/dev/tty1\" ]; then\n  exec dbus-run-session labwc\nfi\nEOF\n" | sudo tee -a rootfs/build.sh
+          printf "cat > /home/admin/.profile << 'PROFILEEOF'\nif [ \"\$(tty)\" = \"/dev/tty1\" ]; then\n  exec dbus-run-session labwc\nfi\nPROFILEEOF\n" | sudo tee -a rootfs/build.sh
           printf 'chown admin:admin /home/admin/.profile\n' | sudo tee -a rootfs/build.sh
           printf 'rm -rf /var/cache/apk/*\n' | sudo tee -a rootfs/build.sh
 
@@ -55,7 +54,6 @@ jobs:
           sudo chroot rootfs /build.sh
           sudo rm -f rootfs/build.sh
 
-          # Cleanup mounts
           for d in run dev sys proc; do
             sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
           done
@@ -88,29 +86,28 @@ jobs:
           for c in sh mount cat ls grep umount switch_root mkdir sleep; do
             ln -s busybox bin/$c
           done
-          cat > init << 'EOF'
-#!/bin/busybox sh
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev
-echo "[ZenithOS] Booting..."
-mkdir -p /media /newroot
-SQUASH=""
-for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
-  [ -b "$dev" ] || continue
-  if mount -o ro "$dev" /media 2>/dev/null; then
-    if [ -f "/media/zenith.squashfs" ]; then
-      SQUASH="/media/zenith.squashfs"
-      break
-    fi
-    umount /media 2>/dev/null
-  fi
-done
-[ -z "$SQUASH" ] && exec /bin/sh
-mount -t squashfs -o loop,ro "$SQUASH" /newroot
-umount -l /proc /sys /dev 2>/dev/null
-exec switch_root /newroot /sbin/init
-EOF
+          # كتابة init باستخدام printf
+          printf '#!/bin/busybox sh\n' > init
+          printf 'mount -t proc proc /proc\n' >> init
+          printf 'mount -t sysfs sys /sys\n' >> init
+          printf 'mount -t devtmpfs dev /dev\n' >> init
+          printf 'echo "[ZenithOS] Booting..."\n' >> init
+          printf 'mkdir -p /media /newroot\n' >> init
+          printf 'SQUASH=""\n' >> init
+          printf 'for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do\n' >> init
+          printf '  [ -b "$dev" ] || continue\n' >> init
+          printf '  if mount -o ro "$dev" /media 2>/dev/null; then\n' >> init
+          printf '    if [ -f "/media/zenith.squashfs" ]; then\n' >> init
+          printf '      SQUASH="/media/zenith.squashfs"\n' >> init
+          printf '      break\n' >> init
+          printf '    fi\n' >> init
+          printf '    umount /media 2>/dev/null\n' >> init
+          printf '  fi\n' >> init
+          printf 'done\n' >> init
+          printf '[ -z "$SQUASH" ] && exec /bin/sh\n' >> init
+          printf 'mount -t squashfs -o loop,ro "$SQUASH" /newroot\n' >> init
+          printf 'umount -l /proc /sys /dev 2>/dev/null\n' >> init
+          printf 'exec switch_root /newroot /sbin/init\n' >> init
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
@@ -118,13 +115,13 @@ EOF
       - name: GRUB setup
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
-          cat > iso_root/boot/grub/grub.cfg << 'EOF'
-set timeout=3
-menuentry "ZenithOS" {
-    linux /boot/vmlinuz quiet
-    initrd /boot/initramfs
-}
-EOF
+          # كتابة grub.cfg بدون heredoc
+          printf 'set timeout=3\n' > iso_root/boot/grub/grub.cfg
+          printf 'menuentry "ZenithOS" {\n' >> iso_root/boot/grub/grub.cfg
+          printf '    linux /boot/vmlinuz quiet\n' >> iso_root/boot/grub/grub.cfg
+          printf '    initrd /boot/initramfs\n' >> iso_root/boot/grub/grub.cfg
+          printf '}\n' >> iso_root/boot/grub/grub.cfg
+
           grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
             biosdisk iso9660 normal linux configfile
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
