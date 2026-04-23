@@ -1,4 +1,4 @@
-name: ZenithOS Final Auto
+name: ZenithOS Final Fix
 
 on:
   push:
@@ -31,59 +31,38 @@ jobs:
       - name: Build system in chroot
         run: |
           set -e
+          # Mount virtual filesystems
           for d in proc sys dev run; do
             sudo mkdir -p rootfs/$d
             sudo mount --bind /$d rootfs/$d
           done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
-          cleanup() {
-            for d in run dev sys proc; do
-              sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
-            done
-          }
-          trap cleanup EXIT
+          # Prepare build script without ANY heredoc inside YAML
+          printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
+          printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
+          printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
+          printf 'apk update\n' | sudo tee -a rootfs/build.sh
+          printf 'apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas dbus elogind connman seatd util-linux labwc waybar foot wofi thunar firefox-esr mesa-dri-gallium font-noto\n' | sudo tee -a rootfs/build.sh
+          printf 'rc-update add dbus default\nrc-update add elogind default\nrc-update add connman default\nrc-update add seatd default\n' | sudo tee -a rootfs/build.sh
+          printf 'adduser -D admin\naddgroup admin wheel\npasswd -d admin\necho "permit persist :wheel" > /etc/doas.conf\n' | sudo tee -a rootfs/build.sh
+          printf "echo 'agetty_options=\"--autologin admin --noclear\"' > /etc/conf.d/agetty.tty1\n" | sudo tee -a rootfs/build.sh
+          printf "cat > /home/admin/.profile << 'EOF'\nif [ \"\$(tty)\" = \"/dev/tty1\" ]; then\n  exec dbus-run-session labwc\nfi\nEOF\n" | sudo tee -a rootfs/build.sh
+          printf 'chown admin:admin /home/admin/.profile\n' | sudo tee -a rootfs/build.sh
+          printf 'rm -rf /var/cache/apk/*\n' | sudo tee -a rootfs/build.sh
 
-          sudo chroot rootfs /bin/sh -ex << 'CHROOT'
+          sudo chmod +x rootfs/build.sh
+          sudo chroot rootfs /build.sh
+          sudo rm -f rootfs/build.sh
 
-cat > /etc/apk/repositories << EOF
-https://dl-cdn.alpinelinux.org/alpine/v3.20/main
-https://dl-cdn.alpinelinux.org/alpine/v3.20/community
-EOF
-
-apk update
-apk add --no-cache \
-  linux-lts linux-firmware alpine-base openrc bash doas \
-  dbus elogind connman seatd util-linux \
-  labwc waybar foot wofi thunar firefox-esr \
-  mesa-dri-gallium font-noto
-
-rc-update add dbus default
-rc-update add elogind default
-rc-update add connman default
-rc-update add seatd default
-
-adduser -D admin
-addgroup admin wheel
-passwd -d admin
-echo "permit persist :wheel" > /etc/doas.conf
-echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
-
-cat > /home/admin/.profile << 'EOF'
-if [ "$(tty)" = "/dev/tty1" ]; then
-  exec dbus-run-session labwc
-fi
-EOF
-chown admin:admin /home/admin/.profile
-
-rm -rf /var/cache/apk/*
-CHROOT
-
-      - name: Clean rootfs with rsync
-        run: |
+          # Cleanup mounts
           for d in run dev sys proc; do
             sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
           done
+          sudo rm -f rootfs/etc/resolv.conf
+
+      - name: Clean rootfs
+        run: |
           sudo rm -rf rootfs_clean
           sudo rsync -a \
             --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp \
@@ -98,7 +77,7 @@ CHROOT
         run: |
           mkdir -p iso_root/boot iso_root/EFI/BOOT
           KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
-          [ -z "$KERNEL" ] && echo "ERROR" && exit 1
+          [ -z "$KERNEL" ] && echo "ERROR: kernel not found!" && exit 1
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
 
       - name: Build initramfs
@@ -136,7 +115,7 @@ EOF
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      - name: GRUB
+      - name: GRUB setup
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
