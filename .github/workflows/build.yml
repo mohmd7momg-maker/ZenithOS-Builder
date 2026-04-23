@@ -1,4 +1,4 @@
-name: ZenithOS CLEAN BUILD V8 (ZERO WARNINGS)
+name: ZenithOS v3 FINAL SAFE
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -29,8 +29,10 @@ jobs:
           sudo tar xzf rootfs.tar.gz -C rootfs
 
       # ================= CHROOT BUILD =================
-      - name: Build system
+      - name: Build system inside chroot
         run: |
+          set -e
+
           for d in proc sys dev run; do
             sudo mkdir -p rootfs/$d
             sudo mount --bind /$d rootfs/$d
@@ -38,7 +40,9 @@ jobs:
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
           cleanup() {
+            echo ">>> Cleanup mounts..."
             for d in run dev sys proc; do
+              sudo umount -R rootfs/$d 2>/dev/null || \
               sudo umount -lf rootfs/$d 2>/dev/null || true
             done
           }
@@ -57,7 +61,7 @@ apk add --no-cache \
   linux-lts linux-firmware alpine-base openrc bash doas \
   dbus elogind connman seatd util-linux \
   labwc waybar foot wofi thunar firefox-esr \
-  mesa-dri-gallium font-noto rsync
+  mesa-dri-gallium font-noto
 
 rc-update add dbus default
 rc-update add elogind default
@@ -81,23 +85,60 @@ chown admin:admin /home/admin/.profile
 rm -rf /var/cache/apk/*
 CHROOT
 
-      # ================= CLEAN ROOTFS (NO PROC ERRORS EVER) =================
-      - name: Create clean rootfs (ZERO PROC WARNINGS)
+      # ================= CLEANUP MOUNTS (SAFE) =================
+      - name: Cleanup mounts (force)
         run: |
-          sudo rm -rf rootfs.clean
-          sudo rsync -a \
-            --exclude proc \
-            --exclude sys \
-            --exclude dev \
-            --exclude run \
-            --exclude tmp \
-            rootfs/ rootfs.clean/
+          echo ">>> Force unmounting..."
+          for d in run dev sys proc; do
+            sudo umount -R rootfs/$d 2>/dev/null || \
+            sudo umount -lf rootfs/$d 2>/dev/null || true
+          done
+
+          # انتظار حتى تؤكد أن لا شيء معلق
+          for i in $(seq 1 10); do
+            if mount | grep -q "rootfs/proc\|rootfs/sys\|rootfs/dev"; then
+              echo "  waiting for unmount... ($i)"
+              sleep 1
+            else
+              echo "  all unmounted OK"
+              break
+            fi
+          done
+
+          if mount | grep -q "rootfs/proc\|rootfs/sys\|rootfs/dev"; then
+            echo "FATAL: still mounted!"
+            exit 1
+          fi
+
+          # حذف المجلدات وإعادة إنشائها فارغة
+          for d in proc sys dev run tmp; do
+            sudo rm -rf rootfs/$d
+            sudo mkdir -p rootfs/$d
+          done
+          sudo chmod 1777 rootfs/tmp
+          sudo rm -f rootfs/etc/resolv.conf
+
+      # ================= BUILD SQUASHFS (CLEAN) =================
+      - name: Build squashfs
+        run: |
+          echo "Building squashfs cleanly..."
+          sudo mksquashfs rootfs iso_root/zenith.squashfs \
+            -noappend \
+            -comp zstd \
+            -Xcompression-level 3 \
+            -one-file-system \
+            -processors $(nproc) \
+            -quiet
 
       # ================= KERNEL =================
       - name: Copy kernel
         run: |
           mkdir -p iso_root/boot iso_root/EFI/BOOT
-          KERNEL=$(ls rootfs.clean/boot/vmlinuz-* | sort -V | tail -1)
+          KERNEL=$(ls rootfs/boot/vmlinuz-* | sort -V | tail -1)
+          if [ -z "$KERNEL" ]; then
+            echo "ERROR: kernel not found!"
+            exit 1
+          fi
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
 
       # ================= INITRAMFS =================
@@ -107,8 +148,8 @@ CHROOT
           cp "$(which busybox)" initramfs/bin/
 
           cd initramfs
-          for c in sh mount cat ls awk grep umount switch_root mkdir sleep; do
-            ln -s busybox bin/$c
+          for cmd in sh mount cat ls awk grep umount switch_root mkdir sleep; do
+            ln -s busybox bin/$cmd
           done
 
           cat > init << 'EOF'
@@ -118,37 +159,31 @@ mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev
 
-echo "[ZenithOS] Booting..."
+echo "[ZenithOS] Searching for zenith.squashfs..."
 sleep 1
 
 mkdir -p /media /newroot
 SQUASH=""
 
-for dev in /dev/sd* /dev/vd* /dev/sr*; do
+for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
   [ -b "$dev" ] || continue
-  echo "Checking $dev..."
-
-  mount -o ro -t auto "$dev" /media 2>/dev/null || continue
-
-  if [ -f "/media/zenith.squashfs" ]; then
-    SQUASH="/media/zenith.squashfs"
-    break
+  echo "Trying $dev..."
+  if mount -o ro "$dev" /media 2>/dev/null; then
+    if [ -f "/media/zenith.squashfs" ]; then
+      SQUASH="/media/zenith.squashfs"
+      echo "Found on $dev"
+      break
+    fi
+    umount /media 2>/dev/null
   fi
-
-  umount /media 2>/dev/null
 done
 
-if [ -z "$SQUASH" ] && [ -f /zenith.squashfs ]; then
-  SQUASH="/zenith.squashfs"
-fi
-
 if [ -z "$SQUASH" ]; then
-  echo "FATAL: squashfs not found"
-  exec sh
+  echo "FATAL: zenith.squashfs not found"
+  exec /bin/sh
 fi
 
 mount -t squashfs -o loop,ro "$SQUASH" /newroot
-
 umount -l /proc /sys /dev 2>/dev/null
 exec switch_root /newroot /sbin/init
 EOF
@@ -157,38 +192,28 @@ EOF
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      # ================= SQUASHFS =================
-      - name: Build squashfs
-        run: |
-          sudo mksquashfs rootfs.clean iso_root/zenith.squashfs \
-            -noappend \
-            -comp zstd \
-            -b 1M \
-            -Xcompression-level 3 \
-            -processors $(nproc) \
-            -no-progress \
-            -quiet
-
       # ================= GRUB =================
       - name: GRUB setup
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
 
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
-set timeout=2
+set timeout=3
 set default=0
 
-menuentry "ZenithOS CLEAN V8" {
-    linux /boot/vmlinuz quiet
+menuentry "ZenithOS v3" {
+    linux /boot/vmlinuz quiet loglevel=3
     initrd /boot/initramfs
 }
 EOF
 
+          # BIOS
           grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
             biosdisk iso9660 normal linux configfile
 
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
+          # UEFI
           grub-mkstandalone --format=x86_64-efi \
             --output=iso_root/EFI/BOOT/BOOTX64.EFI \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
@@ -202,7 +227,7 @@ EOF
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "ZENITH_V8" \
+            -volid "ZENITH_V3" \
             -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -217,6 +242,6 @@ EOF
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: ZenithOS-CLEAN-V8
+          name: ZenithOS-v3-FINAL
           path: ZenithOS.iso
           retention-days: 7
