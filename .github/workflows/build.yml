@@ -1,177 +1,230 @@
-name: QamarOS 4.4.6 FINAL (Polished Production Initramfs)
+name: QamarOS 4.5.0 Production (Fully Stable)
 
 on:
   workflow_dispatch:
+    inputs:
+      password:
+        description: 'Admin password'
+        required: false
+        default: 'liveuser'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
+      # ================= TOOLS =================
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
-            grub-common mtools wget cpio util-linux busybox-static
+            grub-common mtools wget cpio util-linux busybox-static \
+            ca-certificates dosfstools
 
-      - name: Build rootfs
+      # ================= ROOTFS =================
+      - name: Download rootfs
         run: |
           wget -q -O rootfs.tar.gz \
             https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
           mkdir rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      - name: Build squashfs
+      # ================= CHROOT =================
+      - name: Build system
         run: |
-          sudo mksquashfs rootfs rootfs.sqfs \
-            -comp zstd -Xcompression-level 1 \
-            -b 256K -processors $(nproc) \
-            -noappend
+          for d in proc sys dev; do
+            sudo mount --bind /$d rootfs/$d
+          done
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
-      - name: Prepare ISO
-        run: |
-          mkdir -p iso/boot/grub iso/EFI/BOOT
-          sudo apt-get install -y linux-image-generic
-          cp /boot/vmlinuz-* iso/boot/vmlinuz
-          cp rootfs.sqfs iso/rootfs.sqfs
+          sudo chroot rootfs /bin/sh -ex << 'CHROOT'
 
-      - name: Create initramfs (Hardened + Clean mounts)
-        run: |
-          mkdir -p initramfs/bin initramfs/proc initramfs/sys initramfs/dev initramfs/mnt initramfs/newroot
+          cat > /etc/apk/repositories << EOF
+          https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+          https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+          EOF
 
-          cp "$(which busybox)" initramfs/bin/busybox
+          apk update
 
-          cd initramfs
+          apk add --no-cache \
+            alpine-base linux-lts openrc bash doas \
+            eudev dbus elogind connman \
+            seatd wpa_supplicant \
+            labwc waybar foot wofi thunar \
+            firefox pipewire pipewire-pulse wireplumber \
+            mesa-dri-gallium font-noto zram-init \
+            htop neofetch
 
-          for cmd in sh mount cat ls mkdir awk grep sleep umount chroot; do
-            ln -s busybox bin/$cmd
+          # ================= USER =================
+          adduser -D -s /bin/bash admin
+          echo "admin:${{ inputs.password }}" | chpasswd
+          passwd -l root
+
+          for g in wheel audio video seat input netdev; do
+            addgroup admin $g 2>/dev/null || true
           done
 
-          cat > init << 'EOF'
-#!/bin/busybox sh
+          echo "permit persist :wheel" > /etc/doas.conf
 
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev
+          # ================= MODE DETECTION =================
+          cat > /usr/local/bin/qamar-boot-mode << 'EOF'
+#!/bin/bash
+MODE=$(cat /proc/cmdline 2>/dev/null | grep -o 'qamar-mode=[a-z]*' | cut -d= -f2)
 
-echo "[QamarOS 4.4.6] Booting..."
+case "$MODE" in
+    lite)
+        echo "[QamarOS] Lite Mode"
+        exec /bin/bash
+        ;;
+    console)
+        echo "[QamarOS] Console Mode"
+        exec /bin/bash
+        ;;
+    full|desktop|*)
+        echo "[QamarOS] Full Desktop Mode"
+        exec labwc
+        ;;
+esac
+EOF
+          chmod +x /usr/local/bin/qamar-boot-mode
 
-ROOTFS=""
+          # ================= SERVICES =================
+          rc-update add udev sysinit
+          rc-update add dbus boot
+          rc-update add elogind default
+          rc-update add seatd default
+          rc-update add connman default
+          rc-update add zram-init default
 
-# -------------------------
-# (1) mounted ISO scan
-# -------------------------
-while IFS= read -r line; do
-    mp=$(echo "$line" | awk '{print $2}')
-    if [ -f "$mp/rootfs.sqfs" ]; then
-        ROOTFS="$mp/rootfs.sqfs"
-        ISO_MNT="$mp"
-        break
-    fi
-done < /proc/mounts
+          # ================= ZRAM =================
+          echo 'zram_size="40%"' > /etc/conf.d/zram-init
+          echo 'zram_algorithm="zstd"' >> /etc/conf.d/zram-init
 
-# -------------------------
-# (2) initramfs root fallback
-# -------------------------
-[ -z "$ROOTFS" ] && [ -f /rootfs.sqfs ] && ROOTFS="/rootfs.sqfs"
-
-# -------------------------
-# (3) block device fallback
-# -------------------------
-if [ -z "$ROOTFS" ]; then
-    for dev in /dev/sr0 /dev/sr1 /dev/sda /dev/sdb; do
-        [ -b "$dev" ] || continue
-        mount -t iso9660 "$dev" /mnt 2>/dev/null && \
-        [ -f /mnt/rootfs.sqfs ] && ROOTFS="/mnt/rootfs.sqfs" && ISO_MNT="/mnt" && break
-    done
-fi
-
-# -------------------------
-# validation
-# -------------------------
-if [ -z "$ROOTFS" ]; then
-    echo "FATAL: rootfs.sqfs not found"
-    cat /proc/mounts
-    exec /bin/sh
-fi
-
-echo "[QamarOS] Found rootfs: $ROOTFS"
-
-mkdir -p /newroot
-
-mount -t squashfs "$ROOTFS" /newroot 2>/dev/null || {
-    echo "Squashfs failed, trying loop fallback..."
-    mount -o loop "$ROOTFS" /newroot
-}
-
-# -------------------------
-# OPTIONAL CLEANUP (your improvement)
-# -------------------------
-umount /mnt 2>/dev/null
-
-# -------------------------
-# safe system cleanup
-# -------------------------
-umount -l /proc 2>/dev/null
-umount -l /sys 2>/dev/null
-umount -l /dev 2>/dev/null
-
-echo "[QamarOS] Switching root..."
-
-# -------------------------
-# robust init fallback
-# -------------------------
-exec chroot /newroot /sbin/init 2>/dev/null || \
-exec chroot /newroot /bin/busybox init
+          # ================= SECURITY =================
+          cat > /etc/sysctl.d/qamar.conf << 'EOF'
+kernel.kptr_restrict=2
+kernel.dmesg_restrict=1
+kernel.randomize_va_space=2
+fs.protected_symlinks=1
+fs.protected_hardlinks=1
 EOF
 
-          chmod +x init
+          # ================= LOGIN =================
+          sed -i 's|tty1::respawn:/sbin/getty 38400 tty1|tty1::respawn:/sbin/getty -a admin 38400 tty1|' /etc/inittab
 
-          find . | cpio -o -H newc | gzip > ../iso/boot/initramfs
-          cd ..
+          cat > /home/admin/.bash_profile << 'EOF'
+if [ "$(tty)" = "/dev/tty1" ]; then
+    exec /usr/local/bin/qamar-boot-mode
+fi
+EOF
+          chown admin:admin /home/admin/.bash_profile
 
-      - name: GRUB config
+          # ================= INITRAMFS =================
+          KVER=$(ls /lib/modules | sort -V | tail -1)
+          depmod -a "$KVER"
+          mkinitfs -o /boot/initramfs-qamar "$KVER"
+
+          rm -rf /var/cache/apk/*
+          CHROOT
+
+          for d in proc sys dev; do
+            sudo umount -lf rootfs/$d 2>/dev/null || true
+          done
+
+          KVER=$(ls rootfs/lib/modules | sort -V | tail -1)
+          echo "KVER=$KVER" >> $GITHUB_ENV
+
+      # ================= CLEAN =================
+      - name: Clean system
         run: |
-          cat > grub.cfg << 'EOF'
-set timeout=2
-set default=0
+          sudo rm -rf rootfs/proc rootfs/sys rootfs/dev
+          sudo mkdir -p rootfs/proc rootfs/sys rootfs/dev
+          sudo rm -rf rootfs/run rootfs/tmp/* rootfs/var/run 2>/dev/null || true
 
-menuentry "QamarOS 4.4.6 Stable" {
-    linux /boot/vmlinuz root=LABEL=QAMAR_OS
+      # ================= SQUASHFS =================
+      - name: Build squashfs
+        run: |
+          mkdir -p iso_root/boot
+
+          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz
+          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs
+
+          sudo mksquashfs rootfs iso_root/qamar.squashfs \
+            -comp zstd -b 1M -Xcompression-level 6 \
+            -processors $(nproc) -noappend
+
+      # ================= GRUB =================
+      - name: Create GRUB config
+        run: |
+          mkdir -p iso_root/boot/grub
+
+          cat > iso_root/boot/grub/grub.cfg << 'EOF'
+set timeout=3
+set default=0
+set gfxpayload=keep
+
+menuentry "QamarOS 4.5.0 Full Desktop" {
+    linux /boot/vmlinuz quiet qamar-mode=full root=LABEL=QAMAR_OS
+    initrd /boot/initramfs
+}
+
+menuentry "QamarOS 4.5.0 Lite Mode" {
+    linux /boot/vmlinuz quiet qamar-mode=lite root=LABEL=QAMAR_OS
+    initrd /boot/initramfs
+}
+
+menuentry "QamarOS 4.5.0 Console" {
+    linux /boot/vmlinuz quiet qamar-mode=console root=LABEL=QAMAR_OS
     initrd /boot/initramfs
 }
 EOF
 
-      - name: Build bootloaders
+      # ================= BIOS =================
+      - name: BIOS bootloader
         run: |
-          grub-mkstandalone --format=x86_64-efi \
-            --output=iso/EFI/BOOT/BOOTX64.EFI \
-            "boot/grub/grub.cfg=grub.cfg"
-
           grub-mkstandalone --format=i386-pc \
-            --output=iso/boot/grub/eltorito.img \
-            "boot/grub/grub.cfg=grub.cfg"
+            --output=iso_root/boot/grub/i386-pc/eltorito.img \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
 
-          cp grub.cfg iso/boot/grub/
+      # ================= UEFI =================
+      - name: UEFI bootloader
+        run: |
+          mkdir -p iso_root/EFI/BOOT
 
+          grub-mkstandalone --format=x86_64-efi \
+            --output=bootx64.efi \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+
+          cp bootx64.efi iso_root/EFI/BOOT/BOOTX64.EFI
+
+          dd if=/dev/zero of=iso_root/efi.img bs=1M count=4
+          mkfs.vfat iso_root/efi.img
+          mmd -i iso_root/efi.img ::/EFI ::/EFI/BOOT
+          mcopy -i iso_root/efi.img bootx64.efi ::/EFI/BOOT/
+
+      # ================= ISO =================
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
             -iso-level 3 \
             -volid "QAMAR_OS" \
-            -eltorito-boot boot/grub/eltorito.img \
+            -eltorito-boot boot/grub/i386-pc/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
+            --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+            --grub2-boot-info \
             -eltorito-alt-boot \
-            -e EFI/BOOT/BOOTX64.EFI \
-            -no-emul-boot \
+            -e efi.img -no-emul-boot \
             -isohybrid-gpt-basdat \
-            -output QamarOS.iso iso
+            -output QamarOS-4.5.0-Production.iso iso_root
 
-      - name: Upload artifact
+      # ================= UPLOAD =================
+      - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: QamarOS-4.4.6-FINAL
-          path: QamarOS.iso
+          name: QamarOS-4.5.0-Production
+          path: QamarOS-4.5.0-Production.iso
+          retention-days: 7
