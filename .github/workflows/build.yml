@@ -1,4 +1,4 @@
-name: ZenithOS v3 FINAL SAFE
+name: ZenithOS Final Stable
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
             grub-common mtools wget cpio util-linux busybox-static \
-            ca-certificates dosfstools
+            ca-certificates dosfstools rsync
 
       - name: Download Alpine rootfs
         run: |
@@ -77,39 +77,32 @@ chown admin:admin /home/admin/.profile
 rm -rf /var/cache/apk/*
 CHROOT
 
-      - name: Cleanup mounts force
+      - name: Cleanup mounts and create clean rootfs
         run: |
+          # فصل كل المجلدات الوهمية
           for d in run dev sys proc; do
             sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
           done
-          for i in $(seq 1 10); do
-            if mount | grep -q "rootfs/proc\|rootfs/sys\|rootfs/dev"; then
-              sleep 1
-            else
-              break
-            fi
-          done
-          if mount | grep -q "rootfs/proc\|rootfs/sys\|rootfs/dev"; then
-            echo "FATAL: still mounted"
-            exit 1
-          fi
-          for d in proc sys dev run tmp; do
-            sudo rm -rf rootfs/$d
-            sudo mkdir -p rootfs/$d
-          done
-          sudo chmod 1777 rootfs/tmp
-          sudo rm -f rootfs/etc/resolv.conf
+          # إنشاء rootfs نظيف خالٍ تماماً من proc/sys/dev/run/tmp
+          sudo rm -rf rootfs_clean
+          sudo rsync -a \
+            --exclude proc \
+            --exclude sys \
+            --exclude dev \
+            --exclude run \
+            --exclude tmp \
+            rootfs/ rootfs_clean/
 
       - name: Build squashfs
         run: |
-          sudo mksquashfs rootfs iso_root/zenith.squashfs \
+          sudo mksquashfs rootfs_clean iso_root/zenith.squashfs \
             -noappend -comp zstd -Xcompression-level 3 \
-            -one-file-system -processors $(nproc) -quiet
+            -processors $(nproc) -quiet
 
       - name: Copy kernel
         run: |
           mkdir -p iso_root/boot iso_root/EFI/BOOT
-          KERNEL=$(ls rootfs/boot/vmlinuz-* | sort -V | tail -1)
+          KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
           [ -z "$KERNEL" ] && echo "ERROR" && exit 1
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
 
@@ -155,7 +148,7 @@ EOF
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
 set timeout=3
 set default=0
-menuentry "ZenithOS v3" {
+menuentry "ZenithOS Final" {
     linux /boot/vmlinuz quiet loglevel=3
     initrd /boot/initramfs
 }
@@ -174,7 +167,7 @@ EOF
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "ZENITH_V3" -iso-level 3 \
+            -volid "ZENITH_FINAL" -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
@@ -186,6 +179,6 @@ EOF
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: ZenithOS-v3-FINAL
+          name: ZenithOS-Final-Stable
           path: ZenithOS.iso
           retention-days: 7
