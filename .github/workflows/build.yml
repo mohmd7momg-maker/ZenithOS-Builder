@@ -1,4 +1,4 @@
-name: ZenithOS Stable Build (no heredoc)
+name: ZenithOS Final Build (No EFI img, No errors)
 
 on:
   push:
@@ -37,6 +37,7 @@ jobs:
           done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
+          # كتابة سكريبت البناء
           printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
@@ -67,7 +68,7 @@ jobs:
 
       - name: Prepare ISO directory and copy kernel
         run: |
-          mkdir -p iso_root/boot iso_root/EFI/BOOT
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
           KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
           [ -z "$KERNEL" ] && echo "ERROR: kernel not found!" && exit 1
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
@@ -111,35 +112,36 @@ jobs:
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      - name: GRUB setup
+      - name: GRUB setup (BIOS + EFI without extra image)
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+
+          # كتابة grub.cfg
           printf 'set timeout=3\n' > iso_root/boot/grub/grub.cfg
           printf 'menuentry "ZenithOS" {\n' >> iso_root/boot/grub/grub.cfg
           printf '    linux /boot/vmlinuz quiet\n' >> iso_root/boot/grub/grub.cfg
           printf '    initrd /boot/initramfs\n' >> iso_root/boot/grub/grub.cfg
           printf '}\n' >> iso_root/boot/grub/grub.cfg
 
+          # BIOS boot
           grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
             biosdisk iso9660 normal linux configfile
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
+
+          # EFI boot – ننقل الملف مباشرة إلى المسار المطلوب
           grub-mkstandalone --format=x86_64-efi \
             --output=iso_root/EFI/BOOT/BOOTX64.EFI \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
-          dd if=/dev/zero of=iso_root/efi.img bs=1M count=4
-          mkfs.vfat iso_root/efi.img
-          mmd -i iso_root/efi.img ::/EFI ::/EFI/BOOT
-          mcopy -i iso_root/efi.img iso_root/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/
 
-      - name: Build ISO
+      - name: Build ISO (Simple EFI without extra image)
         run: |
           xorriso -as mkisofs \
             -volid "ZENITH_FIX" -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
-            -no-emul-boot -boot-load-size 4 -boot-info-table \
-            --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
-            --grub2-boot-info \
-            -eltorito-alt-boot -e efi.img -no-emul-boot \
+              -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot \
+              -e EFI/BOOT/BOOTX64.EFI \
+              -no-emul-boot \
             -isohybrid-gpt-basdat \
             -output ZenithOS.iso iso_root
 
