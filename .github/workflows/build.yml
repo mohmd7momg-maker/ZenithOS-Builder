@@ -1,4 +1,4 @@
-name: QamarOS Zero Errors Build
+name: QamarOS Zero Errors Stable Build
 
 on:
   workflow_dispatch:
@@ -23,22 +23,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
             grub-common mtools wget cpio util-linux busybox-static \
-            ca-certificates dosfstools
+            ca-certificates dosfstools rsync
 
       # ================= ROOTFS =================
-      - name: Download rootfs
+      - name: Download Alpine rootfs
         run: |
           wget -q -O rootfs.tar.gz \
             https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
           mkdir rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      # ================= CHROOT =================
+      # ================= CHROOT BUILD =================
       - name: Build system
         run: |
           for d in proc sys dev; do
             sudo mount --bind /$d rootfs/$d
           done
+
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
           sudo chroot rootfs /bin/sh -ex << 'CHROOT'
@@ -59,7 +60,7 @@ jobs:
             mesa-dri-gallium font-noto zram-init \
             htop neofetch
 
-          # User
+          # ================= USER =================
           adduser -D -s /bin/bash admin
           echo "admin:${{ inputs.password }}" | chpasswd
           passwd -l root
@@ -70,7 +71,7 @@ jobs:
 
           echo "permit persist :wheel" > /etc/doas.conf
 
-          # Services
+          # ================= SERVICES =================
           rc-update add udev sysinit
           rc-update add dbus boot
           rc-update add elogind default
@@ -78,11 +79,11 @@ jobs:
           rc-update add connman default
           rc-update add zram-init default
 
-          # ZRAM
+          # ================= ZRAM =================
           echo 'zram_size="40%"' > /etc/conf.d/zram-init
           echo 'zram_algorithm="zstd"' >> /etc/conf.d/zram-init
 
-          # Security
+          # ================= SECURITY =================
           cat > /etc/sysctl.d/qamar.conf << 'EOF'
 kernel.kptr_restrict=2
 kernel.dmesg_restrict=1
@@ -91,7 +92,7 @@ fs.protected_symlinks=1
 fs.protected_hardlinks=1
 EOF
 
-          # Initramfs
+          # ================= INITRAMFS =================
           KVER=$(ls /lib/modules | sort -V | tail -1)
           depmod -a "$KVER"
           mkinitfs -o /boot/initramfs-qamar "$KVER"
@@ -103,23 +104,41 @@ EOF
             sudo umount -lf rootfs/$d 2>/dev/null || true
           done
 
-      # ================= CLEAN VFS (IMPORTANT FIX) =================
-      - name: Clean virtual filesystems
+      # ================= CLEAN VIRTUAL FS =================
+      - name: Clean rootfs
         run: |
           sudo rm -rf rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp 2>/dev/null || true
           sudo mkdir -p rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp
           sudo chmod 1777 rootfs/tmp
 
-      # ================= SQUASHFS (ZERO ERRORS MODE) =================
-      - name: Build squashfs (fixed)
+      # ================= CREATE CLEAN ROOTFS =================
+      - name: Create clean rootfs (FIX PROC ISSUE)
+        run: |
+          sudo rsync -a --delete \
+            --exclude='proc' \
+            --exclude='sys' \
+            --exclude='dev' \
+            --exclude='run' \
+            --exclude='tmp' \
+            --exclude='var/run' \
+            rootfs/ clean_rootfs/
+
+          sudo rm -rf clean_rootfs/proc clean_rootfs/sys clean_rootfs/dev 2>/dev/null || true
+          sudo rm -rf clean_rootfs/run clean_rootfs/tmp 2>/dev/null || true
+
+          sudo mkdir -p clean_rootfs/proc clean_rootfs/sys clean_rootfs/dev
+          sudo mkdir -p clean_rootfs/run clean_rootfs/tmp
+          sudo chmod 1777 clean_rootfs/tmp
+
+      # ================= SQUASHFS =================
+      - name: Build squashfs
         run: |
           mkdir -p iso_root/boot
 
-          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz || true
-          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs || true
+          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz 2>/dev/null || true
+          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs 2>/dev/null || true
 
-          sudo mksquashfs rootfs iso_root/qamar.squashfs \
-            -e proc sys dev run tmp var/run \
+          sudo mksquashfs clean_rootfs iso_root/qamar.squashfs \
             -comp zstd \
             -b 1M \
             -Xcompression-level 6 \
