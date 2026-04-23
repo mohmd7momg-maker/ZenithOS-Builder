@@ -1,4 +1,4 @@
-name: ZenithOS HYBRID PRO v6 (FULLY FIXED – BOOTS 100%)
+name: ZenithOS HYBRID PRO v7 (FINAL BOOT FIX)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +18,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
             grub-common mtools wget cpio util-linux busybox-static \
-            ca-certificates dosfstools
+            ca-certificates dosfstools rsync
 
       # ================= ROOTFS =================
       - name: Download Alpine rootfs
@@ -28,12 +28,9 @@ jobs:
           mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      # ================= CHROOT BUILD (WITH MOUNTS) =================
-      - name: Build system inside chroot
+      # ================= CHROOT =================
+      - name: Build system
         run: |
-          set -e
-
-          # Mount virtual filesystems
           for d in proc sys dev run; do
             sudo mkdir -p rootfs/$d
             sudo mount --bind /$d rootfs/$d
@@ -49,174 +46,176 @@ jobs:
 
           sudo chroot rootfs /bin/sh -ex << 'CHROOT'
 
-          # ========== FIX: clean repositories (no leading spaces) ==========
-          cat > /etc/apk/repositories << 'EOF'
-          https://dl-cdn.alpinelinux.org/alpine/v3.20/main
-          https://dl-cdn.alpinelinux.org/alpine/v3.20/community
-          EOF
+          cat > /etc/apk/repositories << EOF
+https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+EOF
 
           apk update
 
-          # ========== Packages (lighter Firefox ESR) ==========
           apk add --no-cache \
             linux-lts linux-firmware alpine-base openrc bash doas \
             dbus elogind connman seatd util-linux \
             labwc waybar foot wofi thunar firefox-esr \
             mesa-dri-gallium font-noto
 
-          # ========== Services ==========
           rc-update add dbus default
           rc-update add elogind default
           rc-update add connman default
           rc-update add seatd default
 
-          # ========== User ==========
           adduser -D admin
           addgroup admin wheel
           passwd -d admin
           echo "permit persist :wheel" > /etc/doas.conf
 
-          # ========== AUTO-LOGIN on tty1 (FIX) ==========
-          mkdir -p /etc/conf.d
-          cat > /etc/conf.d/agetty.tty1 << 'EOF'
-          agetty_options="--autologin admin --noclear"
-          EOF
+          echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
-          # ========== GUI autostart after login ==========
           cat > /home/admin/.profile << 'EOF'
-          if [ "$(tty)" = "/dev/tty1" ]; then
-            exec dbus-run-session labwc
-          fi
-          EOF
+if [ "$(tty)" = "/dev/tty1" ]; then
+  exec dbus-run-session labwc
+fi
+EOF
           chown admin:admin /home/admin/.profile
 
-          # ========== Cleanup ==========
           rm -rf /var/cache/apk/*
           CHROOT
 
-          # Unmount after chroot
-          cleanup
-
-      # ================= HARD CLEAN (REMOVE VIRTUAL FS) =================
-      - name: Remove virtual filesystems
+      # ================= CLEAN =================
+      - name: Cleanup mounts
         run: |
-          for d in proc sys dev run tmp; do
-            sudo rm -rf rootfs/$d
-            sudo mkdir -p rootfs/$d
-          done
-          sudo chmod 1777 rootfs/tmp
+          sudo umount -R rootfs/proc 2>/dev/null || true
+          sudo umount -R rootfs/sys 2>/dev/null || true
+          sudo umount -R rootfs/dev 2>/dev/null || true
+          sudo umount -R rootfs/run 2>/dev/null || true
           sudo rm -f rootfs/etc/resolv.conf
 
-      # ================= COPY KERNEL =================
+      # ================= 🔥 FINAL FIX =================
+      - name: Create clean rootfs
+        run: |
+          sudo rm -rf rootfs.clean
+          sudo rsync -a \
+            --exclude proc \
+            --exclude sys \
+            --exclude dev \
+            --exclude run \
+            --exclude tmp \
+            rootfs/ rootfs.clean/
+
+      # ================= KERNEL =================
       - name: Copy kernel
         run: |
           mkdir -p iso_root/boot iso_root/EFI/BOOT
-          KERNEL=$(ls rootfs/boot/vmlinuz-* | sort -V | tail -1)
+          KERNEL=$(ls rootfs.clean/boot/vmlinuz-* | sort -V | tail -1)
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
 
-      # ================= INITRAMFS (FIXED – SCANS BLOCK DEVICES) =================
-      - name: Build initramfs (busybox)
+      # ================= INITRAMFS (FIXED BOOT) =================
+      - name: Build initramfs
         run: |
           mkdir -p initramfs/bin initramfs/newroot
           cp "$(which busybox)" initramfs/bin/
 
           cd initramfs
-          for cmd in sh mount cat ls awk grep umount chroot switch_root mkdir sleep; do
-            ln -s busybox bin/$cmd
+          for c in sh mount cat ls awk grep umount switch_root mkdir sleep; do
+            ln -s busybox bin/$c
           done
 
           cat > init << 'EOF'
-          #!/bin/busybox sh
+#!/bin/busybox sh
 
-          mount -t proc proc /proc
-          mount -t sysfs sys /sys
-          mount -t devtmpfs dev /dev
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
 
-          echo "[ZenithOS] Booting, searching for squashfs..."
-          sleep 2
+echo "[ZenithOS] Searching for zenith.squashfs..."
+sleep 1
 
-          mkdir -p /media /newroot
-          SQUASH=""
+mkdir -p /media /newroot
+SQUASH=""
 
-          for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda; do
-            [ -b "$dev" ] || continue
-            echo "Trying $dev..."
-            if mount -o ro "$dev" /media 2>/dev/null; then
-              if [ -f "/media/zenith.squashfs" ]; then
-                SQUASH="/media/zenith.squashfs"
-                echo "Found squashfs on $dev"
-                break
-              fi
-              umount /media 2>/dev/null
-            fi
-          done
+for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda; do
+  [ -b "$dev" ] || continue
+  echo "Trying $dev..."
 
-          if [ -z "$SQUASH" ]; then
-            echo "FATAL: zenith.squashfs not found on any device"
-            exec /bin/sh
-          fi
+  if mount -o ro "$dev" /media 2>/dev/null; then
+    if [ -f "/media/zenith.squashfs" ]; then
+      SQUASH="/media/zenith.squashfs"
+      echo "Found on $dev"
+      break
+    fi
+    umount /media 2>/dev/null
+  fi
+done
 
-          mount -t squashfs -o loop,ro "$SQUASH" /newroot
-          mount --move /media /newroot/media
+# fallback
+if [ -z "$SQUASH" ] && [ -f /zenith.squashfs ]; then
+  SQUASH="/zenith.squashfs"
+fi
 
-          umount -l /proc /sys /dev 2>/dev/null
-          exec switch_root /newroot /sbin/init
-          EOF
+if [ -z "$SQUASH" ]; then
+  echo "FATAL: zenith.squashfs not found"
+  exec sh
+fi
+
+mount -t squashfs -o loop,ro "$SQUASH" /newroot
+
+umount -l /proc /sys /dev 2>/dev/null
+exec switch_root /newroot /sbin/init
+EOF
 
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      # ================= SQUASHFS (EXCLUDE VIRTUAL DIRS) =================
+      # ================= SQUASHFS CLEAN =================
       - name: Build squashfs
         run: |
-          sudo mksquashfs rootfs iso_root/zenith.squashfs \
-            -e proc sys dev run tmp var/run \
-            -noappend -comp zstd -b 1M -Xcompression-level 6 \
-            -processors $(nproc) -quiet
+          sudo mksquashfs rootfs.clean iso_root/zenith.squashfs \
+            -noappend \
+            -comp zstd \
+            -b 1M \
+            -Xcompression-level 3 \
+            -processors $(nproc) \
+            -no-progress \
+            -quiet
 
-      # ================= GRUB (BIOS + UEFI – FIXED) =================
-      - name: GRUB bootloaders
+      # ================= GRUB =================
+      - name: GRUB boot
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
 
-          # GRUB config
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
-          set timeout=3
-          set default=0
-          set gfxpayload=keep
+set timeout=2
+set default=0
 
-          menuentry "ZenithOS PRO v6 (Live)" {
-            linux /boot/vmlinuz quiet loglevel=3
-            initrd /boot/initramfs
-          }
-          EOF
+menuentry "ZenithOS v7 (FINAL)" {
+    linux /boot/vmlinuz quiet loglevel=3
+    initrd /boot/initramfs
+}
+EOF
 
-          # BIOS: grub-mkimage + cdboot.img (the correct way)
           grub-mkimage \
             -O i386-pc \
             -o /tmp/core.img \
             -p /boot/grub \
-            biosdisk iso9660 normal linux echo configfile
+            biosdisk iso9660 normal linux configfile
 
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
-          # UEFI: grub-mkstandalone works fine
           grub-mkstandalone --format=x86_64-efi \
             --output=iso_root/EFI/BOOT/BOOTX64.EFI \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
 
-          # Create EFI image for hybrid ISO
           dd if=/dev/zero of=iso_root/efi.img bs=1M count=4
           mkfs.vfat iso_root/efi.img
           mmd -i iso_root/efi.img ::/EFI ::/EFI/BOOT
           mcopy -i iso_root/efi.img iso_root/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/
 
-      # ================= BUILD HYBRID ISO =================
+      # ================= ISO =================
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "ZENITH_V6" \
+            -volid "ZENITH_V7" \
             -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -231,6 +230,6 @@ jobs:
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: ZenithOS-PRO-v6
+          name: ZenithOS-PRO-v7-FINAL
           path: ZenithOS.iso
           retention-days: 7
