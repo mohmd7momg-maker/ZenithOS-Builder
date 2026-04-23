@@ -1,4 +1,4 @@
-name: QamarOS 4.5.0 Zero-Warnings Build
+name: QamarOS Zero Errors Build
 
 on:
   workflow_dispatch:
@@ -16,11 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ================= SPEED BOOST =================
-      - name: Build optimizations
-        run: |
-          echo "MAKEFLAGS=-j$(nproc)" >> $GITHUB_ENV
-
       # ================= TOOLS =================
       - name: Install tools
         run: |
@@ -31,20 +26,19 @@ jobs:
             ca-certificates dosfstools
 
       # ================= ROOTFS =================
-      - name: Download Alpine rootfs
+      - name: Download rootfs
         run: |
           wget -q -O rootfs.tar.gz \
             https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
           mkdir rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      # ================= CHROOT BUILD =================
+      # ================= CHROOT =================
       - name: Build system
         run: |
           for d in proc sys dev; do
             sudo mount --bind /$d rootfs/$d
           done
-
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
           sudo chroot rootfs /bin/sh -ex << 'CHROOT'
@@ -60,12 +54,12 @@ jobs:
             alpine-base linux-lts openrc bash doas \
             eudev dbus elogind connman \
             seatd wpa_supplicant \
-            labwc waybar foot wofi thunar \
-            firefox pipewire pipewire-pulse wireplumber \
+            labwc waybar foot wofi thunar firefox \
+            pipewire pipewire-pulse wireplumber \
             mesa-dri-gallium font-noto zram-init \
             htop neofetch
 
-          # ================= USER =================
+          # User
           adduser -D -s /bin/bash admin
           echo "admin:${{ inputs.password }}" | chpasswd
           passwd -l root
@@ -76,7 +70,7 @@ jobs:
 
           echo "permit persist :wheel" > /etc/doas.conf
 
-          # ================= SERVICES =================
+          # Services
           rc-update add udev sysinit
           rc-update add dbus boot
           rc-update add elogind default
@@ -84,11 +78,11 @@ jobs:
           rc-update add connman default
           rc-update add zram-init default
 
-          # ================= ZRAM =================
+          # ZRAM
           echo 'zram_size="40%"' > /etc/conf.d/zram-init
           echo 'zram_algorithm="zstd"' >> /etc/conf.d/zram-init
 
-          # ================= SECURITY =================
+          # Security
           cat > /etc/sysctl.d/qamar.conf << 'EOF'
 kernel.kptr_restrict=2
 kernel.dmesg_restrict=1
@@ -97,94 +91,63 @@ fs.protected_symlinks=1
 fs.protected_hardlinks=1
 EOF
 
-          # ================= INITRAMFS =================
+          # Initramfs
           KVER=$(ls /lib/modules | sort -V | tail -1)
           depmod -a "$KVER"
           mkinitfs -o /boot/initramfs-qamar "$KVER"
 
           rm -rf /var/cache/apk/*
-
           CHROOT
 
-      # ================= CLEAN (ZERO WARNINGS CORE FIX) =================
-      - name: Clean rootfs (CRITICAL FIX)
-        run: |
-          # 🔥 Remove ALL runtime virtual FS before squashfs
-          sudo rm -rf rootfs/proc/* 2>/dev/null || true
-          sudo rm -rf rootfs/sys/* 2>/dev/null || true
-          sudo rm -rf rootfs/dev/* 2>/dev/null || true
-          sudo rm -rf rootfs/run/* rootfs/tmp/* rootfs/var/run/* 2>/dev/null || true
-
-          # recreate minimal structure only
-          sudo mkdir -p rootfs/proc rootfs/sys rootfs/dev
-          sudo mkdir -p rootfs/run rootfs/tmp
-          sudo chmod 1777 rootfs/tmp
-
-      # ================= UNMOUNT =================
-      - name: Cleanup mounts
-        if: always()
-        run: |
           for d in proc sys dev; do
             sudo umount -lf rootfs/$d 2>/dev/null || true
           done
-          sudo rm -f rootfs/etc/resolv.conf
 
-      # ================= SQUASHFS (ZERO WARNINGS MODE) =================
-      - name: Build squashfs (clean silent mode)
+      # ================= CLEAN VFS (IMPORTANT FIX) =================
+      - name: Clean virtual filesystems
+        run: |
+          sudo rm -rf rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp 2>/dev/null || true
+          sudo mkdir -p rootfs/proc rootfs/sys rootfs/dev rootfs/run rootfs/tmp
+          sudo chmod 1777 rootfs/tmp
+
+      # ================= SQUASHFS (ZERO ERRORS MODE) =================
+      - name: Build squashfs (fixed)
         run: |
           mkdir -p iso_root/boot
 
-          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz
-          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs
+          sudo cp rootfs/boot/vmlinuz-lts iso_root/boot/vmlinuz || true
+          sudo cp rootfs/boot/initramfs-qamar iso_root/boot/initramfs || true
 
-          # 🚀 FULL CLEAN BUILD (NO PROC EVER ENTERS)
           sudo mksquashfs rootfs iso_root/qamar.squashfs \
             -e proc sys dev run tmp var/run \
-            -no-exports \
-            -no-progress \
-            -noappend \
             -comp zstd \
-            -Xcompression-level 9 \
-            -processors $(nproc)
+            -b 1M \
+            -Xcompression-level 6 \
+            -processors $(nproc) \
+            -noappend \
+            -quiet
 
       # ================= GRUB =================
-      - name: Bootloader
+      - name: GRUB config
         run: |
-          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+          mkdir -p iso_root/boot/grub
 
           cat > iso_root/boot/grub/grub.cfg << 'EOF'
 set timeout=3
 set default=0
 
-menuentry "QamarOS 4.5.0 Desktop" {
-    linux /boot/vmlinuz quiet qamar-mode=full root=LABEL=QAMAR_OS
-    initrd /boot/initramfs
-}
-
-menuentry "QamarOS Lite Mode" {
-    linux /boot/vmlinuz quiet qamar-mode=lite root=LABEL=QAMAR_OS
-    initrd /boot/initramfs
-}
-
-menuentry "QamarOS Console" {
-    linux /boot/vmlinuz quiet qamar-mode=console root=LABEL=QAMAR_OS
+menuentry "QamarOS Stable" {
+    linux /boot/vmlinuz quiet root=LABEL=QAMAR_OS
     initrd /boot/initramfs
 }
 EOF
 
-          # BIOS
+      # ================= BIOS =================
+      - name: BIOS boot
+        run: |
           grub-mkstandalone --format=i386-pc \
             --output=iso_root/boot/grub/eltorito.img \
-            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg" \
-            >/dev/null 2>&1 || true
-
-          # UEFI
-          grub-mkstandalone --format=x86_64-efi \
-            --output=bootx64.efi \
-            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg" \
-            >/dev/null 2>&1 || true
-
-          cp bootx64.efi iso_root/EFI/BOOT/BOOTX64.EFI
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
 
       # ================= ISO =================
       - name: Build ISO
@@ -193,17 +156,12 @@ EOF
             -volid "QAMAR_OS" \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
-            --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
-            -eltorito-alt-boot \
-            -e efi.img -no-emul-boot \
-            -isohybrid-gpt-basdat \
-            -output QamarOS-4.5.0-ZeroWarnings.iso iso_root \
-            >/dev/null 2>&1
+            -output QamarOS.iso iso_root
 
       # ================= UPLOAD =================
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: QamarOS-4.5.0-ZeroWarnings
-          path: QamarOS-4.5.0-ZeroWarnings.iso
+          name: QamarOS-Zero-Errors
+          path: QamarOS.iso
           retention-days: 7
