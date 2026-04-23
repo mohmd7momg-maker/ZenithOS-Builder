@@ -1,4 +1,4 @@
-name: ZenithOS HYBRID PRO v7 (FINAL BOOT FIX)
+name: ZenithOS CLEAN BUILD V8 (ZERO WARNINGS)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
           mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      # ================= CHROOT =================
+      # ================= CHROOT BUILD =================
       - name: Build system
         run: |
           for d in proc sys dev run; do
@@ -46,52 +46,43 @@ jobs:
 
           sudo chroot rootfs /bin/sh -ex << 'CHROOT'
 
-          cat > /etc/apk/repositories << EOF
+cat > /etc/apk/repositories << EOF
 https://dl-cdn.alpinelinux.org/alpine/v3.20/main
 https://dl-cdn.alpinelinux.org/alpine/v3.20/community
 EOF
 
-          apk update
+apk update
 
-          apk add --no-cache \
-            linux-lts linux-firmware alpine-base openrc bash doas \
-            dbus elogind connman seatd util-linux \
-            labwc waybar foot wofi thunar firefox-esr \
-            mesa-dri-gallium font-noto
+apk add --no-cache \
+  linux-lts linux-firmware alpine-base openrc bash doas \
+  dbus elogind connman seatd util-linux \
+  labwc waybar foot wofi thunar firefox-esr \
+  mesa-dri-gallium font-noto rsync
 
-          rc-update add dbus default
-          rc-update add elogind default
-          rc-update add connman default
-          rc-update add seatd default
+rc-update add dbus default
+rc-update add elogind default
+rc-update add connman default
+rc-update add seatd default
 
-          adduser -D admin
-          addgroup admin wheel
-          passwd -d admin
-          echo "permit persist :wheel" > /etc/doas.conf
+adduser -D admin
+addgroup admin wheel
+passwd -d admin
+echo "permit persist :wheel" > /etc/doas.conf
 
-          echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
+echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
-          cat > /home/admin/.profile << 'EOF'
+cat > /home/admin/.profile << 'EOF'
 if [ "$(tty)" = "/dev/tty1" ]; then
   exec dbus-run-session labwc
 fi
 EOF
-          chown admin:admin /home/admin/.profile
+chown admin:admin /home/admin/.profile
 
-          rm -rf /var/cache/apk/*
-          CHROOT
+rm -rf /var/cache/apk/*
+CHROOT
 
-      # ================= CLEAN =================
-      - name: Cleanup mounts
-        run: |
-          sudo umount -R rootfs/proc 2>/dev/null || true
-          sudo umount -R rootfs/sys 2>/dev/null || true
-          sudo umount -R rootfs/dev 2>/dev/null || true
-          sudo umount -R rootfs/run 2>/dev/null || true
-          sudo rm -f rootfs/etc/resolv.conf
-
-      # ================= 🔥 FINAL FIX =================
-      - name: Create clean rootfs
+      # ================= CLEAN ROOTFS (NO PROC ERRORS EVER) =================
+      - name: Create clean rootfs (ZERO PROC WARNINGS)
         run: |
           sudo rm -rf rootfs.clean
           sudo rsync -a \
@@ -109,7 +100,7 @@ EOF
           KERNEL=$(ls rootfs.clean/boot/vmlinuz-* | sort -V | tail -1)
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
 
-      # ================= INITRAMFS (FIXED BOOT) =================
+      # ================= INITRAMFS =================
       - name: Build initramfs
         run: |
           mkdir -p initramfs/bin initramfs/newroot
@@ -127,33 +118,32 @@ mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev
 
-echo "[ZenithOS] Searching for zenith.squashfs..."
+echo "[ZenithOS] Booting..."
 sleep 1
 
 mkdir -p /media /newroot
 SQUASH=""
 
-for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda; do
+for dev in /dev/sd* /dev/vd* /dev/sr*; do
   [ -b "$dev" ] || continue
-  echo "Trying $dev..."
+  echo "Checking $dev..."
 
-  if mount -o ro "$dev" /media 2>/dev/null; then
-    if [ -f "/media/zenith.squashfs" ]; then
-      SQUASH="/media/zenith.squashfs"
-      echo "Found on $dev"
-      break
-    fi
-    umount /media 2>/dev/null
+  mount -o ro -t auto "$dev" /media 2>/dev/null || continue
+
+  if [ -f "/media/zenith.squashfs" ]; then
+    SQUASH="/media/zenith.squashfs"
+    break
   fi
+
+  umount /media 2>/dev/null
 done
 
-# fallback
 if [ -z "$SQUASH" ] && [ -f /zenith.squashfs ]; then
   SQUASH="/zenith.squashfs"
 fi
 
 if [ -z "$SQUASH" ]; then
-  echo "FATAL: zenith.squashfs not found"
+  echo "FATAL: squashfs not found"
   exec sh
 fi
 
@@ -167,7 +157,7 @@ EOF
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      # ================= SQUASHFS CLEAN =================
+      # ================= SQUASHFS =================
       - name: Build squashfs
         run: |
           sudo mksquashfs rootfs.clean iso_root/zenith.squashfs \
@@ -180,7 +170,7 @@ EOF
             -quiet
 
       # ================= GRUB =================
-      - name: GRUB boot
+      - name: GRUB setup
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
 
@@ -188,16 +178,13 @@ EOF
 set timeout=2
 set default=0
 
-menuentry "ZenithOS v7 (FINAL)" {
-    linux /boot/vmlinuz quiet loglevel=3
+menuentry "ZenithOS CLEAN V8" {
+    linux /boot/vmlinuz quiet
     initrd /boot/initramfs
 }
 EOF
 
-          grub-mkimage \
-            -O i386-pc \
-            -o /tmp/core.img \
-            -p /boot/grub \
+          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
             biosdisk iso9660 normal linux configfile
 
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
@@ -215,7 +202,7 @@ EOF
       - name: Build ISO
         run: |
           xorriso -as mkisofs \
-            -volid "ZENITH_V7" \
+            -volid "ZENITH_V8" \
             -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -230,6 +217,6 @@ EOF
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: ZenithOS-PRO-v7-FINAL
+          name: ZenithOS-CLEAN-V8
           path: ZenithOS.iso
           retention-days: 7
