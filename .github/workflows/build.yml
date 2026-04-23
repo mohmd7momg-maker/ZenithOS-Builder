@@ -37,7 +37,6 @@ jobs:
           done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
 
-          # كتابة سكريبت البناء باستخدام printf بدون heredoc
           printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
@@ -66,17 +65,18 @@ jobs:
             --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp \
             rootfs/ rootfs_clean/
 
-      - name: Build squashfs
-        run: |
-          sudo mksquashfs rootfs_clean iso_root/zenith.squashfs \
-            -noappend -comp zstd -Xcompression-level 3 -processors $(nproc) -quiet
-
-      - name: Copy kernel
+      - name: Prepare ISO directory and copy kernel
         run: |
           mkdir -p iso_root/boot iso_root/EFI/BOOT
           KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
           [ -z "$KERNEL" ] && echo "ERROR: kernel not found!" && exit 1
           sudo cp "$KERNEL" iso_root/boot/vmlinuz
+
+      - name: Build squashfs
+        run: |
+          mkdir -p iso_root
+          sudo mksquashfs rootfs_clean iso_root/zenith.squashfs \
+            -noappend -comp zstd -Xcompression-level 3 -processors $(nproc) -quiet
 
       - name: Build initramfs
         run: |
@@ -86,7 +86,6 @@ jobs:
           for c in sh mount cat ls grep umount switch_root mkdir sleep; do
             ln -s busybox bin/$c
           done
-          # كتابة init باستخدام printf
           printf '#!/bin/busybox sh\n' > init
           printf 'mount -t proc proc /proc\n' >> init
           printf 'mount -t sysfs sys /sys\n' >> init
@@ -115,7 +114,6 @@ jobs:
       - name: GRUB setup
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
-          # كتابة grub.cfg بدون heredoc
           printf 'set timeout=3\n' > iso_root/boot/grub/grub.cfg
           printf 'menuentry "ZenithOS" {\n' >> iso_root/boot/grub/grub.cfg
           printf '    linux /boot/vmlinuz quiet\n' >> iso_root/boot/grub/grub.cfg
