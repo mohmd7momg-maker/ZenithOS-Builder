@@ -26,7 +26,8 @@ jobs:
 
       - name: Prepare build script
         run: |
-          cat > rootfs/build.sh <<'EOF'
+          # استخدام sudo tee لتفادي خطأ الصلاحيات
+          sudo tee rootfs/build.sh > /dev/null <<'EOF'
           #!/bin/sh -ex
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
