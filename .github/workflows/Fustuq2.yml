@@ -1,8 +1,6 @@
-name: فستق Minimal Optimized2
+name: فستق Stable Build (No FAT)
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -39,24 +37,19 @@ jobs:
 
           printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
 
-          # المستودعات
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'apk update\n' | sudo tee -a rootfs/build.sh
 
-          # الحزم
           printf 'apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas dbus elogind connman seatd util-linux labwc waybar foot wofi thunar firefox-esr mesa-dri-gallium font-noto haveged zram-init\n' | sudo tee -a rootfs/build.sh
 
-          # الخدمات
           printf 'rc-update add dbus default\n'    | sudo tee -a rootfs/build.sh
           printf 'rc-update add elogind default\n' | sudo tee -a rootfs/build.sh
           printf 'rc-update add connman default\n' | sudo tee -a rootfs/build.sh
-          # seatd, haveged, zram-init في runlevel boot لضمان الجاهزية المبكرة
           printf 'rc-update add seatd boot\n'      | sudo tee -a rootfs/build.sh
           printf 'rc-update add haveged boot\n'    | sudo tee -a rootfs/build.sh
           printf 'rc-update add zram-init boot\n'  | sudo tee -a rootfs/build.sh
 
-          # إعدادات zram-init الصحيحة (إصلاح 2+3)
           printf 'cat > /etc/conf.d/zram-init << '"'"'ZCONF\n'"'"'\n' | sudo tee -a rootfs/build.sh
           printf 'load_on_start="yes"\n'           | sudo tee -a rootfs/build.sh
           printf 'unload_on_stop="yes"\n'          | sudo tee -a rootfs/build.sh
@@ -67,7 +60,6 @@ jobs:
           printf 'algo0="lz4"\n'                   | sudo tee -a rootfs/build.sh
           printf 'ZCONF\n'                         | sudo tee -a rootfs/build.sh
 
-          # المستخدم admin
           printf 'adduser -D admin\n'                           | sudo tee -a rootfs/build.sh
           printf 'addgroup admin wheel\n'                       | sudo tee -a rootfs/build.sh
           printf 'addgroup admin video\n'                       | sudo tee -a rootfs/build.sh
@@ -75,14 +67,11 @@ jobs:
           printf 'passwd -d admin\n'                            | sudo tee -a rootfs/build.sh
           printf 'echo "permit persist :wheel" > /etc/doas.conf\n' | sudo tee -a rootfs/build.sh
 
-          # تسجيل دخول تلقائي
           printf "echo 'agetty_options=\"--autologin admin --noclear\"' > /etc/conf.d/agetty.tty1\n" | sudo tee -a rootfs/build.sh
 
-          # تشغيل labwc تلقائياً
           printf "cat > /home/admin/.profile << 'PROFILEEOF'\nif [ \"\$(tty)\" = \"/dev/tty1\" ]; then\n  exec dbus-run-session labwc\nfi\nPROFILEEOF\n" | sudo tee -a rootfs/build.sh
           printf 'chown admin:admin /home/admin/.profile\n' | sudo tee -a rootfs/build.sh
 
-          # تنظيف
           printf 'rm -rf /usr/share/man /usr/share/doc /usr/share/info\n' | sudo tee -a rootfs/build.sh
           printf 'rm -rf /var/cache/apk/*\n' | sudo tee -a rootfs/build.sh
 
@@ -106,7 +95,6 @@ jobs:
       - name: تطبيق تحسينات الأداء
         run: |
 
-          # sysctl tuning
           sudo tee -a rootfs_clean/etc/sysctl.conf > /dev/null << 'SEOF'
 # == Fustuq performance tweaks ==
 vm.swappiness=80
@@ -118,7 +106,6 @@ vm.oom_kill_allocating_task=1
 kernel.nmi_watchdog=0
 SEOF
 
-          # labwc config
           sudo mkdir -p rootfs_clean/home/admin/.config/labwc
           sudo tee rootfs_clean/home/admin/.config/labwc/rc.xml > /dev/null << 'LEOF'
 <?xml version="1.0"?>
@@ -143,7 +130,6 @@ SEOF
 </labwc_config>
 LEOF
 
-          # labwc environment
           sudo tee rootfs_clean/home/admin/.config/labwc/environment > /dev/null << 'EEOF'
 LIBSEAT_BACKEND=seatd
 WLR_NO_HARDWARE_CURSORS=1
@@ -151,7 +137,6 @@ MOZ_DISABLE_RDD_SANDBOX=1
 MOZ_WEBRENDER=0
 EEOF
 
-          # waybar config
           sudo mkdir -p rootfs_clean/home/admin/.config/waybar
           sudo tee rootfs_clean/home/admin/.config/waybar/config > /dev/null << 'WEOF'
 {
@@ -178,7 +163,6 @@ EEOF
 }
 WEOF
 
-          # Firefox policies – مسار مزدوج (إصلاح 5)
           sudo mkdir -p rootfs_clean/usr/lib/firefox-esr/distribution
           sudo tee rootfs_clean/usr/lib/firefox-esr/distribution/policies.json > /dev/null << 'FEOF'
 {
@@ -217,7 +201,6 @@ FEOF
           echo "Kernel version: $KVER"
           mkdir -p initramfs/lib/modules
           for mod in squashfs loop; do
-            # إصلاح 1: find بدلاً من glob غير صالح
             found=$(find rootfs_clean/lib/modules/$KVER \
                       -name "${mod}.ko" -o -name "${mod}.ko.gz" -o -name "${mod}.ko.xz" \
                       2>/dev/null | head -1)
@@ -248,7 +231,6 @@ FEOF
           printf 'mount -t sysfs sys /sys\n'                                                   >> init
           printf 'mount -t devtmpfs dev /dev\n'                                                >> init
           printf 'echo "[Fustuq] Loading kernel modules..."\n'                                 >> init
-          # إصلاح 1: تحميل الوحدات بأمان مع جميع الامتدادات الممكنة
           printf 'for m in /lib/modules/loop.ko /lib/modules/loop.ko.gz /lib/modules/loop.ko.xz; do\n' >> init
           printf '  [ -f "$m" ] && insmod "$m" && break\n'                                     >> init
           printf 'done\n'                                                                      >> init
