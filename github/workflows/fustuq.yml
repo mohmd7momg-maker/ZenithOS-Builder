@@ -1,4 +1,4 @@
-name: فستق Stable Build (No FAT)
+name: فستق 2 (Stable)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,6 @@ jobs:
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
           printf 'apk update\n' | sudo tee -a rootfs/build.sh
-
           printf 'apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas dbus elogind connman seatd util-linux labwc waybar foot wofi thunar firefox-esr mesa-dri-gallium font-noto haveged zram-init\n' | sudo tee -a rootfs/build.sh
 
           printf 'rc-update add dbus default\n'    | sudo tee -a rootfs/build.sh
