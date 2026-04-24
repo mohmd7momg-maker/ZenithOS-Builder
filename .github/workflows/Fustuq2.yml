@@ -1,0 +1,322 @@
+name: فستق Minimal Optimized2
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تثبيت أدوات البناء
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
+            grub-common mtools wget cpio util-linux busybox-static \
+            ca-certificates dosfstools rsync
+
+      - name: تنزيل Alpine rootfs
+        run: |
+          wget -q -O rootfs.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
+          mkdir -p rootfs
+          sudo tar xzf rootfs.tar.gz -C rootfs
+
+      - name: بناء النظام داخل chroot
+        run: |
+          set -e
+          for d in proc sys dev run; do
+            sudo mkdir -p rootfs/$d
+            sudo mount --bind /$d rootfs/$d
+          done
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+
+          printf '#!/bin/sh -ex\n' | sudo tee rootfs/build.sh
+
+          # المستودعات
+          printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
+          printf 'echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories\n' | sudo tee -a rootfs/build.sh
+          printf 'apk update\n' | sudo tee -a rootfs/build.sh
+
+          # الحزم
+          printf 'apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas dbus elogind connman seatd util-linux labwc waybar foot wofi thunar firefox-esr mesa-dri-gallium font-noto haveged zram-init\n' | sudo tee -a rootfs/build.sh
+
+          # الخدمات
+          printf 'rc-update add dbus default\n'    | sudo tee -a rootfs/build.sh
+          printf 'rc-update add elogind default\n' | sudo tee -a rootfs/build.sh
+          printf 'rc-update add connman default\n' | sudo tee -a rootfs/build.sh
+          # seatd, haveged, zram-init في runlevel boot لضمان الجاهزية المبكرة
+          printf 'rc-update add seatd boot\n'      | sudo tee -a rootfs/build.sh
+          printf 'rc-update add haveged boot\n'    | sudo tee -a rootfs/build.sh
+          printf 'rc-update add zram-init boot\n'  | sudo tee -a rootfs/build.sh
+
+          # إعدادات zram-init الصحيحة (إصلاح 2+3)
+          printf 'cat > /etc/conf.d/zram-init << '"'"'ZCONF\n'"'"'\n' | sudo tee -a rootfs/build.sh
+          printf 'load_on_start="yes"\n'           | sudo tee -a rootfs/build.sh
+          printf 'unload_on_stop="yes"\n'          | sudo tee -a rootfs/build.sh
+          printf 'num_devices="1"\n'               | sudo tee -a rootfs/build.sh
+          printf 'type0="swap"\n'                  | sudo tee -a rootfs/build.sh
+          printf 'size0="512"\n'                   | sudo tee -a rootfs/build.sh
+          printf 'maxs0="2048"\n'                  | sudo tee -a rootfs/build.sh
+          printf 'algo0="lz4"\n'                   | sudo tee -a rootfs/build.sh
+          printf 'ZCONF\n'                         | sudo tee -a rootfs/build.sh
+
+          # المستخدم admin
+          printf 'adduser -D admin\n'                           | sudo tee -a rootfs/build.sh
+          printf 'addgroup admin wheel\n'                       | sudo tee -a rootfs/build.sh
+          printf 'addgroup admin video\n'                       | sudo tee -a rootfs/build.sh
+          printf 'addgroup admin input\n'                       | sudo tee -a rootfs/build.sh
+          printf 'passwd -d admin\n'                            | sudo tee -a rootfs/build.sh
+          printf 'echo "permit persist :wheel" > /etc/doas.conf\n' | sudo tee -a rootfs/build.sh
+
+          # تسجيل دخول تلقائي
+          printf "echo 'agetty_options=\"--autologin admin --noclear\"' > /etc/conf.d/agetty.tty1\n" | sudo tee -a rootfs/build.sh
+
+          # تشغيل labwc تلقائياً
+          printf "cat > /home/admin/.profile << 'PROFILEEOF'\nif [ \"\$(tty)\" = \"/dev/tty1\" ]; then\n  exec dbus-run-session labwc\nfi\nPROFILEEOF\n" | sudo tee -a rootfs/build.sh
+          printf 'chown admin:admin /home/admin/.profile\n' | sudo tee -a rootfs/build.sh
+
+          # تنظيف
+          printf 'rm -rf /usr/share/man /usr/share/doc /usr/share/info\n' | sudo tee -a rootfs/build.sh
+          printf 'rm -rf /var/cache/apk/*\n' | sudo tee -a rootfs/build.sh
+
+          sudo chmod +x rootfs/build.sh
+          sudo chroot rootfs /build.sh
+          sudo rm -f rootfs/build.sh
+
+          for d in run dev sys proc; do
+            sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true
+          done
+          sudo rm -f rootfs/etc/resolv.conf
+
+      - name: تنظيف rootfs
+        run: |
+          sudo rm -rf rootfs_clean
+          sudo rsync -a \
+            --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp \
+            rootfs/ rootfs_clean/
+          sudo rm -f rootfs_clean/etc/resolv.conf
+
+      - name: تطبيق تحسينات الأداء
+        run: |
+
+          # sysctl tuning
+          sudo tee -a rootfs_clean/etc/sysctl.conf > /dev/null << 'SEOF'
+# == Fustuq performance tweaks ==
+vm.swappiness=80
+vm.dirty_ratio=10
+vm.dirty_background_ratio=5
+vm.vfs_cache_pressure=50
+vm.min_free_kbytes=32768
+vm.oom_kill_allocating_task=1
+kernel.nmi_watchdog=0
+SEOF
+
+          # labwc config
+          sudo mkdir -p rootfs_clean/home/admin/.config/labwc
+          sudo tee rootfs_clean/home/admin/.config/labwc/rc.xml > /dev/null << 'LEOF'
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <gap>2</gap>
+    <adaptiveSync>no</adaptiveSync>
+  </core>
+  <theme>
+    <name>Clearlooks</name>
+    <font place="ActiveWindow">  <name>Sans</name><size>9</size></font>
+    <font place="InactiveWindow"><name>Sans</name><size>9</size></font>
+    <font place="MenuItem">      <name>Sans</name><size>9</size></font>
+  </theme>
+  <focus><followMouse>no</followMouse></focus>
+  <desktops><number>1</number></desktops>
+  <keyboard>
+    <keybind key="A-Return"><action name="Execute" command="foot" /></keybind>
+    <keybind key="A-q"><action name="CloseWindow" /></keybind>
+    <keybind key="A-d"><action name="Execute" command="wofi --show drun" /></keybind>
+  </keyboard>
+</labwc_config>
+LEOF
+
+          # labwc environment
+          sudo tee rootfs_clean/home/admin/.config/labwc/environment > /dev/null << 'EEOF'
+LIBSEAT_BACKEND=seatd
+WLR_NO_HARDWARE_CURSORS=1
+MOZ_DISABLE_RDD_SANDBOX=1
+MOZ_WEBRENDER=0
+EEOF
+
+          # waybar config
+          sudo mkdir -p rootfs_clean/home/admin/.config/waybar
+          sudo tee rootfs_clean/home/admin/.config/waybar/config > /dev/null << 'WEOF'
+{
+    "layer": "top",
+    "height": 22,
+    "spacing": 4,
+    "modules-left":   [],
+    "modules-center": ["clock"],
+    "modules-right":  ["cpu", "memory"],
+    "clock": {
+        "format": " {:%H:%M  %d/%m/%Y}",
+        "tooltip": false
+    },
+    "cpu": {
+        "format": " CPU:{usage}%",
+        "interval": 5,
+        "tooltip": false
+    },
+    "memory": {
+        "format": " RAM:{used:0.1f}G",
+        "interval": 10,
+        "tooltip": false
+    }
+}
+WEOF
+
+          # Firefox policies – مسار مزدوج (إصلاح 5)
+          sudo mkdir -p rootfs_clean/usr/lib/firefox-esr/distribution
+          sudo tee rootfs_clean/usr/lib/firefox-esr/distribution/policies.json > /dev/null << 'FEOF'
+{
+  "policies": {
+    "DisableTelemetry":      true,
+    "DisableFirefoxStudies": true,
+    "HardwareAcceleration":  false,
+    "Preferences": {
+      "browser.cache.disk.capacity":   {"Value": 51200, "Status": "default"},
+      "dom.ipc.processCount":          {"Value": 1,     "Status": "default"},
+      "browser.sessionstore.interval": {"Value": 60000, "Status": "default"},
+      "gfx.webrender.all":             {"Value": false,  "Status": "default"},
+      "gfx.webrender.enabled":         {"Value": false,  "Status": "default"},
+      "media.ffmpeg.vaapi.enabled":    {"Value": false,  "Status": "default"}
+    }
+  }
+}
+FEOF
+          sudo mkdir -p rootfs_clean/etc/firefox/policies
+          sudo cp \
+            rootfs_clean/usr/lib/firefox-esr/distribution/policies.json \
+            rootfs_clean/etc/firefox/policies/policies.json
+
+          sudo chown -R 1000:1000 rootfs_clean/home/admin/.config
+
+      - name: تحضير مجلد ISO ونسخ النواة
+        run: |
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+          KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
+          [ -z "$KERNEL" ] && echo "ERROR: kernel not found!" && exit 1
+          sudo cp "$KERNEL" iso_root/boot/vmlinuz
+
+      - name: نسخ وحدات kernel إلى initramfs
+        run: |
+          KVER=$(ls rootfs_clean/lib/modules/ | sort -V | tail -1)
+          echo "Kernel version: $KVER"
+          mkdir -p initramfs/lib/modules
+          for mod in squashfs loop; do
+            # إصلاح 1: find بدلاً من glob غير صالح
+            found=$(find rootfs_clean/lib/modules/$KVER \
+                      -name "${mod}.ko" -o -name "${mod}.ko.gz" -o -name "${mod}.ko.xz" \
+                      2>/dev/null | head -1)
+            if [ -n "$found" ]; then
+              sudo cp "$found" initramfs/lib/modules/
+              echo "Copied: $found"
+            else
+              echo "INFO: $mod not found as file – likely built-in, skipping"
+            fi
+          done
+
+      - name: بناء squashfs
+        run: |
+          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs \
+            -noappend -comp zstd -Xcompression-level 3 -processors $(nproc) -quiet
+
+      - name: بناء initramfs
+        run: |
+          mkdir -p initramfs/bin
+          cp "$(which busybox)" initramfs/bin/
+          cd initramfs
+          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod; do
+            ln -sf busybox bin/$c
+          done
+
+          printf '#!/bin/busybox sh\n'                                                          > init
+          printf 'mount -t proc proc /proc\n'                                                  >> init
+          printf 'mount -t sysfs sys /sys\n'                                                   >> init
+          printf 'mount -t devtmpfs dev /dev\n'                                                >> init
+          printf 'echo "[Fustuq] Loading kernel modules..."\n'                                 >> init
+          # إصلاح 1: تحميل الوحدات بأمان مع جميع الامتدادات الممكنة
+          printf 'for m in /lib/modules/loop.ko /lib/modules/loop.ko.gz /lib/modules/loop.ko.xz; do\n' >> init
+          printf '  [ -f "$m" ] && insmod "$m" && break\n'                                     >> init
+          printf 'done\n'                                                                      >> init
+          printf 'for m in /lib/modules/squashfs.ko /lib/modules/squashfs.ko.gz /lib/modules/squashfs.ko.xz; do\n' >> init
+          printf '  [ -f "$m" ] && insmod "$m" && break\n'                                     >> init
+          printf 'done\n'                                                                      >> init
+          printf 'echo "[Fustuq] Searching for root..."\n'                                     >> init
+          printf 'mkdir -p /media /newroot\n'                                                  >> init
+          printf 'SQUASH=""\n'                                                                 >> init
+          printf 'for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do\n' >> init
+          printf '  [ -b "$dev" ] || continue\n'                                               >> init
+          printf '  if mount -t iso9660 -o ro "$dev" /media 2>/dev/null; then\n'               >> init
+          printf '    if [ -f "/media/fustuq.squashfs" ]; then\n'                              >> init
+          printf '      SQUASH="/media/fustuq.squashfs"\n'                                     >> init
+          printf '      break\n'                                                               >> init
+          printf '    fi\n'                                                                    >> init
+          printf '    umount /media 2>/dev/null\n'                                             >> init
+          printf '  fi\n'                                                                      >> init
+          printf 'done\n'                                                                      >> init
+          printf '[ -z "$SQUASH" ] && { echo "[Fustuq] ERROR: squashfs not found!"; exec /bin/sh; }\n' >> init
+          printf 'echo "[Fustuq] Mounting root filesystem..."\n'                               >> init
+          printf 'mount -t squashfs -o ro "$SQUASH" /newroot\n'                                >> init
+          printf 'exec switch_root /newroot /sbin/init\n'                                      >> init
+
+          chmod +x init
+          find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
+          cd ..
+
+      - name: إعداد GRUB (BIOS + EFI مباشر)
+        run: |
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+
+          printf 'set timeout=1\n'                        > iso_root/boot/grub/grub.cfg
+          printf 'insmod iso9660\n'                      >> iso_root/boot/grub/grub.cfg
+          printf 'insmod linux\n'                        >> iso_root/boot/grub/grub.cfg
+          printf 'menuentry "Fustuq OS" {\n'             >> iso_root/boot/grub/grub.cfg
+          printf '    linux /boot/vmlinuz quiet loglevel=0 mitigations=off nowatchdog\n' >> iso_root/boot/grub/grub.cfg
+          printf '    initrd /boot/initramfs\n'          >> iso_root/boot/grub/grub.cfg
+          printf '}\n'                                   >> iso_root/boot/grub/grub.cfg
+
+          grub-mkstandalone \
+            --format=i386-pc \
+            --output=/tmp/core.img \
+            --install-modules="biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos" \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+          cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
+
+          grub-mkstandalone \
+            --format=x86_64-efi \
+            --output=iso_root/EFI/BOOT/BOOTX64.EFI \
+            --install-modules="iso9660 linux normal configfile part_gpt" \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+
+      - name: بناء ISO
+        run: |
+          xorriso -as mkisofs \
+            -volid "FUSTUQ_OS" \
+            -iso-level 3 \
+            -eltorito-boot boot/grub/eltorito.img \
+              -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot \
+              -e EFI/BOOT/BOOTX64.EFI \
+              -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output Fustuq.iso iso_root
+
+      - name: رفع ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: فستق-ISO
+          path: Fustuq.iso
