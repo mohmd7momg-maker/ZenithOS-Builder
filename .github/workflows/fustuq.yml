@@ -1,0 +1,207 @@
+name: فستق 2 (Stable)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
+            grub-common mtools wget cpio util-linux busybox-static \
+            ca-certificates dosfstools rsync
+
+      - name: Download Alpine rootfs
+        run: |
+          wget -q -O rootfs.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
+          mkdir -p rootfs
+          sudo tar xzf rootfs.tar.gz -C rootfs
+
+      - name: Prepare build script
+        run: |
+          cat > rootfs/build.sh <<'EOF'
+          #!/bin/sh -ex
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
+          apk update
+          apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas dbus elogind connman seatd util-linux labwc waybar foot wofi thunar firefox-esr mesa-dri-gallium font-noto haveged zram-init
+          rc-update add dbus default
+          rc-update add elogind default
+          rc-update add connman default
+          rc-update add seatd boot
+          rc-update add haveged boot
+          rc-update add zram-init boot
+          cat > /etc/conf.d/zram-init <<ZCONF
+          load_on_start="yes"
+          unload_on_stop="yes"
+          num_devices="1"
+          type0="swap"
+          size0="512"
+          maxs0="2048"
+          algo0="lz4"
+          ZCONF
+          adduser -D admin
+          addgroup admin wheel
+          addgroup admin video
+          addgroup admin input
+          passwd -d admin
+          echo "permit persist :wheel" > /etc/doas.conf
+          echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
+          cat > /home/admin/.profile <<PROFILEEOF
+          if [ "\$(tty)" = "/dev/tty1" ]; then
+            exec dbus-run-session labwc
+          fi
+          PROFILEEOF
+          chown admin:admin /home/admin/.profile
+          rm -rf /usr/share/man /usr/share/doc /usr/share/info /var/cache/apk/*
+          EOF
+          sudo chmod +x rootfs/build.sh
+
+      - name: Build in chroot
+        run: |
+          set -e
+          for d in proc sys dev run; do sudo mount --bind /$d rootfs/$d; done
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+          sudo chroot rootfs /build.sh
+          sudo rm -f rootfs/build.sh
+          for d in run dev sys proc; do sudo umount -R rootfs/$d 2>/dev/null || sudo umount -lf rootfs/$d 2>/dev/null || true; done
+          sudo rm -f rootfs/etc/resolv.conf
+
+      - name: Clean rootfs
+        run: |
+          sudo rm -rf rootfs_clean
+          sudo rsync -a --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp rootfs/ rootfs_clean/
+          sudo rm -f rootfs_clean/etc/resolv.conf
+
+      - name: Apply system tweaks
+        run: |
+          sudo tee -a rootfs_clean/etc/sysctl.conf > /dev/null <<'SEOF'
+          vm.swappiness=80
+          vm.dirty_ratio=10
+          vm.dirty_background_ratio=5
+          vm.vfs_cache_pressure=50
+          vm.min_free_kbytes=32768
+          vm.oom_kill_allocating_task=1
+          kernel.nmi_watchdog=0
+          SEOF
+
+          sudo mkdir -p rootfs_clean/home/admin/.config/labwc
+          sudo tee rootfs_clean/home/admin/.config/labwc/rc.xml > /dev/null <<'LEOF'
+          <labwc_config>
+            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
+            <theme><name>Clearlooks</name></theme>
+            <focus><followMouse>no</followMouse></focus>
+            <desktops><number>1</number></desktops>
+            <keyboard>
+              <keybind key="A-Return"><action name="Execute" command="foot"/></keybind>
+              <keybind key="A-q"><action name="CloseWindow"/></keybind>
+              <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
+            </keyboard>
+          </labwc_config>
+          LEOF
+
+          sudo tee rootfs_clean/home/admin/.config/labwc/environment > /dev/null <<'EEOF'
+          LIBSEAT_BACKEND=seatd
+          WLR_NO_HARDWARE_CURSORS=1
+          MOZ_DISABLE_RDD_SANDBOX=1
+          MOZ_WEBRENDER=0
+          EEOF
+
+          sudo mkdir -p rootfs_clean/home/admin/.config/waybar
+          sudo tee rootfs_clean/home/admin/.config/waybar/config > /dev/null <<'WEOF'
+          {"layer":"top","height":22,"modules-left":[],"modules-center":["clock"],"modules-right":["cpu","memory"],"clock":{"format":" {:%H:%M  %d/%m/%Y}","tooltip":false},"cpu":{"format":" CPU:{usage}%","interval":5},"memory":{"format":" RAM:{used:0.1f}G","interval":10}}
+          WEOF
+
+          sudo mkdir -p rootfs_clean/usr/lib/firefox-esr/distribution
+          sudo tee rootfs_clean/usr/lib/firefox-esr/distribution/policies.json > /dev/null <<'FEOF'
+          {"policies":{"DisableTelemetry":true,"DisableFirefoxStudies":true,"HardwareAcceleration":false,"Preferences":{"browser.cache.disk.capacity":{"Value":51200,"Status":"default"},"dom.ipc.processCount":{"Value":1,"Status":"default"},"browser.sessionstore.interval":{"Value":60000,"Status":"default"},"gfx.webrender.all":{"Value":false,"Status":"default"},"gfx.webrender.enabled":{"Value":false,"Status":"default"},"media.ffmpeg.vaapi.enabled":{"Value":false,"Status":"default"}}}}
+          FEOF
+          sudo mkdir -p rootfs_clean/etc/firefox/policies
+          sudo cp rootfs_clean/usr/lib/firefox-esr/distribution/policies.json rootfs_clean/etc/firefox/policies/policies.json
+          sudo chown -R 1000:1000 rootfs_clean/home/admin/.config
+
+      - name: Prepare kernel and initramfs
+        run: |
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+          KERNEL=$(ls rootfs_clean/boot/vmlinuz-* | sort -V | tail -1)
+          [ -z "$KERNEL" ] && { echo "ERROR: kernel not found!"; exit 1; }
+          sudo cp "$KERNEL" iso_root/boot/vmlinuz
+
+          KVER=$(ls rootfs_clean/lib/modules/ | sort -V | tail -1)
+          mkdir -p initramfs/lib/modules
+          for mod in squashfs loop; do
+            found=$(find rootfs_clean/lib/modules/$KVER -name "${mod}.ko" -o -name "${mod}.ko.gz" -o -name "${mod}.ko.xz" 2>/dev/null | head -1)
+            if [ -n "$found" ]; then sudo cp "$found" initramfs/lib/modules/; echo "Copied $mod"; else echo "INFO: $mod not found – likely built-in"; fi
+          done
+
+          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -noappend -comp zstd -Xcompression-level 3 -processors $(nproc) -quiet
+
+          mkdir -p initramfs/bin
+          cp "$(which busybox)" initramfs/bin/
+          cd initramfs
+          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod; do ln -sf busybox bin/$c; done
+          cat > init <<'INITEOF'
+          #!/bin/busybox sh
+          mount -t proc proc /proc
+          mount -t sysfs sys /sys
+          mount -t devtmpfs dev /dev
+          echo "[Fustuq] Loading modules..."
+          for m in /lib/modules/loop.ko /lib/modules/loop.ko.gz /lib/modules/loop.ko.xz; do [ -f "$m" ] && { insmod "$m"; break; }; done
+          for m in /lib/modules/squashfs.ko /lib/modules/squashfs.ko.gz /lib/modules/squashfs.ko.xz; do [ -f "$m" ] && { insmod "$m"; break; }; done
+          echo "[Fustuq] Searching for root..."
+          mkdir -p /media /newroot
+          SQUASH=""
+          for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
+            [ -b "$dev" ] || continue
+            if mount -t iso9660 -o ro "$dev" /media 2>/dev/null; then
+              if [ -f "/media/fustuq.squashfs" ]; then SQUASH="/media/fustuq.squashfs"; break; fi
+              umount /media 2>/dev/null
+            fi
+          done
+          [ -z "$SQUASH" ] && { echo "ERROR: squashfs not found!"; exec /bin/sh; }
+          mount -t squashfs -o ro "$SQUASH" /newroot
+          exec switch_root /newroot /sbin/init
+          INITEOF
+          chmod +x init
+          find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
+          cd ..
+
+      - name: GRUB setup
+        run: |
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+          cat > iso_root/boot/grub/grub.cfg <<'GRUBCFG'
+          set timeout=1
+          insmod iso9660
+          insmod linux
+          menuentry "Fustuq OS" {
+            linux /boot/vmlinuz quiet loglevel=0 mitigations=off nowatchdog
+            initrd /boot/initramfs
+          }
+          GRUBCFG
+
+          grub-mkstandalone --format=i386-pc --output=/tmp/core.img --install-modules="biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos" "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+          cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
+
+          grub-mkstandalone --format=x86_64-efi --output=iso_root/EFI/BOOT/BOOTX64.EFI --install-modules="iso9660 linux normal configfile part_gpt" "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+
+      - name: Build ISO
+        run: |
+          xorriso -as mkisofs \
+            -volid "FUSTUQ_OS" -iso-level 3 \
+            -eltorito-boot boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot -e EFI/BOOT/BOOTX64.EFI -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output Fustuq.iso iso_root
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: فستق-ISO
+          path: Fustuq.iso
