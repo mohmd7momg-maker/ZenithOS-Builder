@@ -33,16 +33,17 @@ jobs:
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
           apk update
 
+          # حزم مثبتة (تم تصحيحها: إزالة cmst و atool وإضافة connman-gtk)
           apk add --no-cache \
             linux-lts linux-firmware alpine-base openrc bash doas \
-            dbus elogind connman cmst seatd util-linux \
+            dbus elogind connman connman-gtk seatd util-linux \
             labwc waybar foot wofi thunar thunar-volman \
             firefox-esr mesa-dri-gallium intel-media-driver \
             font-noto ttf-dejavu adwaita-icon-theme \
             haveged polkit-gnome gvfs udisks2 \
             pipewire wireplumber pavucontrol \
             imv mako wl-clipboard clipman grim slurp \
-            zathura zathura-pdf-mupdf atool vis wlsunset \
+            zathura zathura-pdf-mupdf vis wlsunset \
             pciutils usbutils ntfs-3g tzdata
 
           rc-update add dbus default
@@ -53,43 +54,43 @@ jobs:
           rc-update add udisks2 default
 
           cat > /etc/init.d/fustuq-zram <<'ZRAMEOF'
-          #!/sbin/openrc-run
-          description="Fustuq dynamic zram swap"
-          depend() { need sysfs; before swap; }
-          start() {
-              modprobe zram num_devices=1 2>/dev/null || true
-              echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || \
-              echo lzo  > /sys/block/zram0/comp_algorithm 2>/dev/null
-              MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
-              SIZE_MB=$((MEM_KB / 2 / 1024))
-              [ "$SIZE_MB" -gt 1024 ] && SIZE_MB=1024
-              [ "$SIZE_MB" -lt 128  ] && SIZE_MB=128
-              echo "${SIZE_MB}M" > /sys/block/zram0/disksize
-              mkswap /dev/zram0 >/dev/null 2>&1
-              swapon -p 100 /dev/zram0
-              eend $?
-          }
-          stop() {
-              swapoff /dev/zram0 2>/dev/null
-              echo 1 > /sys/block/zram0/reset 2>/dev/null
-              eend 0
-          }
-          ZRAMEOF
+#!/sbin/openrc-run
+description="Fustuq dynamic zram swap"
+depend() { need sysfs; before swap; }
+start() {
+    modprobe zram num_devices=1 2>/dev/null || true
+    echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || \
+    echo lzo  > /sys/block/zram0/comp_algorithm 2>/dev/null
+    MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    SIZE_MB=$((MEM_KB / 2 / 1024))
+    [ "$SIZE_MB" -gt 1024 ] && SIZE_MB=1024
+    [ "$SIZE_MB" -lt 128  ] && SIZE_MB=128
+    echo "${SIZE_MB}M" > /sys/block/zram0/disksize
+    mkswap /dev/zram0 >/dev/null 2>&1
+    swapon -p 100 /dev/zram0
+    eend $?
+}
+stop() {
+    swapoff /dev/zram0 2>/dev/null
+    echo 1 > /sys/block/zram0/reset 2>/dev/null
+    eend 0
+}
+ZRAMEOF
           chmod +x /etc/init.d/fustuq-zram
           rc-update add fustuq-zram boot
 
           mkdir -p /etc/local.d
           cat > /etc/local.d/ntfs-mount.start <<'NTFSEOF'
-          #!/bin/sh
-          sleep 3
-          for dev in $(lsblk -pno NAME,FSTYPE | awk '$2~/ntfs/{print $1}'); do
-              label=$(lsblk -no LABEL "$dev" 2>/dev/null | tr ' ' '_' | tr -d '/')
-              mnt="/media/${label:-ntfs_$(basename $dev)}"
-              mkdir -p "$mnt"
-              mount -t ntfs-3g -o ro,nls=utf8,uid=1000,gid=1000 \
-                "$dev" "$mnt" 2>/dev/null && echo "Mounted: $dev -> $mnt"
-          done
-          NTFSEOF
+#!/bin/sh
+sleep 3
+for dev in $(lsblk -pno NAME,FSTYPE | awk '$2~/ntfs/{print $1}'); do
+    label=$(lsblk -no LABEL "$dev" 2>/dev/null | tr ' ' '_' | tr -d '/')
+    mnt="/media/${label:-ntfs_$(basename $dev)}"
+    mkdir -p "$mnt"
+    mount -t ntfs-3g -o ro,nls=utf8,uid=1000,gid=1000 \
+      "$dev" "$mnt" 2>/dev/null && echo "Mounted: $dev -> $mnt"
+done
+NTFSEOF
           chmod +x /etc/local.d/ntfs-mount.start
           rc-update add local default
 
@@ -100,10 +101,10 @@ jobs:
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
           cat > /home/admin/.profile <<PROFILEEOF
-          if [ "\$(tty)" = "/dev/tty1" ]; then
-            exec dbus-run-session labwc
-          fi
-          PROFILEEOF
+if [ "\$(tty)" = "/dev/tty1" ]; then
+  exec dbus-run-session labwc
+fi
+PROFILEEOF
           chown admin:admin /home/admin/.profile
 
           rm -rf /usr/share/man /usr/share/doc /usr/share/info /var/cache/apk/*
@@ -171,7 +172,7 @@ jobs:
               <keybind key="A-e"><action name="Execute" command="thunar"/></keybind>
               <keybind key="A-q"><action name="CloseWindow"/></keybind>
               <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
-              <keybind key="A-n"><action name="Execute" command="cmst"/></keybind>
+              <keybind key="A-n"><action name="Execute" command="connman-gtk"/></keybind>
               <keybind key="A-v"><action name="Execute" command="pavucontrol"/></keybind>
               <keybind key="Print"><action name="Execute" command="sh -c 'grim -g &quot;$(slurp)&quot; - | wl-copy'"/></keybind>
               <keybind key="A-Escape"><action name="Execute" command="fustuq-powermenu"/></keybind>
