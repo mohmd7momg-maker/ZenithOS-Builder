@@ -33,7 +33,6 @@ jobs:
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
           apk update
 
-          # ✅ إضافة pavucontrol لتحكم الصوت
           apk add --no-cache \
             linux-lts linux-firmware alpine-base openrc bash doas \
             dbus elogind connman cmst seatd util-linux \
@@ -53,7 +52,6 @@ jobs:
           rc-update add haveged boot
           rc-update add udisks2 default
 
-          # خدمة zram ديناميكية
           cat > /etc/init.d/fustuq-zram <<'ZRAMEOF'
           #!/sbin/openrc-run
           description="Fustuq dynamic zram swap"
@@ -80,7 +78,6 @@ jobs:
           chmod +x /etc/init.d/fustuq-zram
           rc-update add fustuq-zram boot
 
-          # ✅ تركيب NTFS مع sleep للانتظار
           mkdir -p /etc/local.d
           cat > /etc/local.d/ntfs-mount.start <<'NTFSEOF'
           #!/bin/sh
@@ -138,135 +135,128 @@ jobs:
       - name: Apply system tweaks and UI config
         run: |
           sudo tee -a rootfs_clean/etc/sysctl.conf > /dev/null <<'SEOF'
-vm.swappiness=80
-vm.dirty_ratio=10
-vm.dirty_background_ratio=5
-vm.vfs_cache_pressure=50
-vm.min_free_kbytes=32768
-vm.oom_kill_allocating_task=1
-kernel.nmi_watchdog=0
-vm.dirty_writeback_centisecs=1500
-vm.dirty_expire_centisecs=3000
-vm.watermark_scale_factor=10
-kernel.sched_autogroup_enabled=0
-SEOF
+          vm.swappiness=80
+          vm.dirty_ratio=10
+          vm.dirty_background_ratio=5
+          vm.vfs_cache_pressure=50
+          vm.min_free_kbytes=32768
+          vm.oom_kill_allocating_task=1
+          kernel.nmi_watchdog=0
+          vm.dirty_writeback_centisecs=1500
+          vm.dirty_expire_centisecs=3000
+          vm.watermark_scale_factor=10
+          kernel.sched_autogroup_enabled=0
+          SEOF
 
-          # Foot terminal
           sudo mkdir -p rootfs_clean/home/admin/.config/foot
           sudo tee rootfs_clean/home/admin/.config/foot/foot.ini > /dev/null <<'FOOTEOF'
-[main]
-font=monospace:size=10
-pad=10x10
-[colors]
-alpha=0.85
-background=000000
-FOOTEOF
+          [main]
+          font=monospace:size=10
+          pad=10x10
+          [colors]
+          alpha=0.85
+          background=000000
+          FOOTEOF
 
-          # ✅ Labwc مع اختصارات محسّنة
           sudo mkdir -p rootfs_clean/home/admin/.config/labwc
           sudo tee rootfs_clean/home/admin/.config/labwc/rc.xml > /dev/null <<'LEOF'
-<?xml version="1.0"?>
-<labwc_config>
-  <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
-  <theme><name>Clearlooks</name></theme>
-  <focus><followMouse>no</followMouse></focus>
-  <desktops><number>1</number></desktops>
-  <keyboard>
-    <keybind key="A-Return"><action name="Execute" command="foot"/></keybind>
-    <keybind key="A-e"><action name="Execute" command="thunar"/></keybind>
-    <keybind key="A-q"><action name="CloseWindow"/></keybind>
-    <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
-    <keybind key="A-n"><action name="Execute" command="cmst"/></keybind>
-    <keybind key="A-v"><action name="Execute" command="pavucontrol"/></keybind>
-    <keybind key="Print"><action name="Execute" command="sh -c 'grim -g &quot;$(slurp)&quot; - | wl-copy'"/></keybind>
-    <keybind key="A-Escape"><action name="Execute" command="fustuq-powermenu"/></keybind>
-  </keyboard>
-</labwc_config>
-LEOF
+          <?xml version="1.0"?>
+          <labwc_config>
+            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
+            <theme><name>Clearlooks</name></theme>
+            <focus><followMouse>no</followMouse></focus>
+            <desktops><number>1</number></desktops>
+            <keyboard>
+              <keybind key="A-Return"><action name="Execute" command="foot"/></keybind>
+              <keybind key="A-e"><action name="Execute" command="thunar"/></keybind>
+              <keybind key="A-q"><action name="CloseWindow"/></keybind>
+              <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
+              <keybind key="A-n"><action name="Execute" command="cmst"/></keybind>
+              <keybind key="A-v"><action name="Execute" command="pavucontrol"/></keybind>
+              <keybind key="Print"><action name="Execute" command="sh -c 'grim -g &quot;$(slurp)&quot; - | wl-copy'"/></keybind>
+              <keybind key="A-Escape"><action name="Execute" command="fustuq-powermenu"/></keybind>
+            </keyboard>
+          </labwc_config>
+          LEOF
 
           sudo tee rootfs_clean/home/admin/.config/labwc/environment > /dev/null <<'EEOF'
-LIBSEAT_BACKEND=seatd
-WLR_NO_HARDWARE_CURSORS=1
-MOZ_DISABLE_RDD_SANDBOX=1
-MOZ_WEBRENDER=0
-EEOF
+          LIBSEAT_BACKEND=seatd
+          WLR_NO_HARDWARE_CURSORS=1
+          MOZ_DISABLE_RDD_SANDBOX=1
+          MOZ_WEBRENDER=0
+          EEOF
 
-          # ✅ Power menu script منفصل (أسهل للصيانة)
           sudo tee rootfs_clean/usr/local/bin/fustuq-powermenu > /dev/null <<'PMEOF'
-#!/bin/sh
-choice=$(printf "Shutdown\nReboot\nExit" | wofi --dmenu --prompt "Power Menu")
-case "$choice" in
-  Shutdown) doas poweroff ;;
-  Reboot)   doas reboot   ;;
-  Exit)     labwc -e      ;;
-esac
-PMEOF
+          #!/bin/sh
+          choice=$(printf "Shutdown\nReboot\nExit" | wofi --dmenu --prompt "Power Menu")
+          case "$choice" in
+            Shutdown) doas poweroff ;;
+            Reboot)   doas reboot   ;;
+            Exit)     labwc -e      ;;
+          esac
+          PMEOF
           sudo chmod +x rootfs_clean/usr/local/bin/fustuq-powermenu
 
-          # ✅ autostart مع المسار الصحيح لـ polkit
           sudo tee rootfs_clean/home/admin/.config/labwc/autostart > /dev/null <<'AUTOSTART'
-#!/bin/sh
-/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
-pipewire &
-pipewire-pulse &
-wireplumber &
-waybar &
-mako &
-clipman daemon &
-wlsunset -l 36.7 -L 3.0 &
-AUTOSTART
+          #!/bin/sh
+          /usr/libexec/polkit-gnome-authentication-agent-1 &
+          pipewire &
+          pipewire-pulse &
+          wireplumber &
+          waybar &
+          mako &
+          clipman daemon &
+          wlsunset -l 36.7 -L 3.0 &
+          AUTOSTART
           sudo chmod +x rootfs_clean/home/admin/.config/labwc/autostart
 
-          # ✅ Thunar custom actions
           sudo mkdir -p rootfs_clean/home/admin/.config/Thunar
           sudo tee rootfs_clean/home/admin/.config/Thunar/uca.xml > /dev/null <<'UCAEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<actions>
-<action>
-  <icon>utilities-terminal</icon>
-  <name>Open Terminal Here</name>
-  <command>foot</command>
-  <description>Open terminal in this folder</description>
-  <patterns>*</patterns>
-  <startup-notify/>
-  <directories/>
-</action>
-</actions>
-UCAEOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <actions>
+          <action>
+            <icon>utilities-terminal</icon>
+            <name>Open Terminal Here</name>
+            <command>foot</command>
+            <description>Open terminal in this folder</description>
+            <patterns>*</patterns>
+            <startup-notify/>
+            <directories/>
+          </action>
+          </actions>
+          UCAEOF
 
-          # Waybar
           sudo mkdir -p rootfs_clean/home/admin/.config/waybar
           sudo tee rootfs_clean/home/admin/.config/waybar/config > /dev/null <<'WEOF'
-{
-  "layer": "top", "height": 24,
-  "modules-left": [], "modules-center": ["clock"], "modules-right": ["cpu","memory"],
-  "clock":  {"format": " {:%H:%M  %d/%m/%Y}", "tooltip": false},
-  "cpu":    {"format": " CPU:{usage}%",        "interval": 5,  "tooltip": false},
-  "memory": {"format": " RAM:{used:0.1f}G",    "interval": 10, "tooltip": false}
-}
-WEOF
+          {
+            "layer": "top", "height": 24,
+            "modules-left": [], "modules-center": ["clock"], "modules-right": ["cpu","memory"],
+            "clock":  {"format": " {:%H:%M  %d/%m/%Y}", "tooltip": false},
+            "cpu":    {"format": " CPU:{usage}%",        "interval": 5,  "tooltip": false},
+            "memory": {"format": " RAM:{used:0.1f}G",    "interval": 10, "tooltip": false}
+          }
+          WEOF
 
-          # Firefox policies
           sudo mkdir -p rootfs_clean/usr/lib/firefox-esr/distribution
           sudo tee rootfs_clean/usr/lib/firefox-esr/distribution/policies.json > /dev/null <<'FEOF'
-{
-  "policies": {
-    "DisableTelemetry":      true,
-    "DisableFirefoxStudies": true,
-    "DisablePocket":         true,
-    "DisableAppUpdate":      true,
-    "HardwareAcceleration":  false,
-    "Preferences": {
-      "browser.cache.disk.capacity":   {"Value": 51200, "Status": "default"},
-      "dom.ipc.processCount":          {"Value": 1,     "Status": "default"},
-      "browser.sessionstore.interval": {"Value": 60000, "Status": "default"},
-      "gfx.webrender.all":             {"Value": false,  "Status": "default"},
-      "gfx.webrender.enabled":         {"Value": false,  "Status": "default"},
-      "media.ffmpeg.vaapi.enabled":    {"Value": false,  "Status": "default"}
-    }
-  }
-}
-FEOF
+          {
+            "policies": {
+              "DisableTelemetry":      true,
+              "DisableFirefoxStudies": true,
+              "DisablePocket":         true,
+              "DisableAppUpdate":      true,
+              "HardwareAcceleration":  false,
+              "Preferences": {
+                "browser.cache.disk.capacity":   {"Value": 51200, "Status": "default"},
+                "dom.ipc.processCount":          {"Value": 1,     "Status": "default"},
+                "browser.sessionstore.interval": {"Value": 60000, "Status": "default"},
+                "gfx.webrender.all":             {"Value": false,  "Status": "default"},
+                "gfx.webrender.enabled":         {"Value": false,  "Status": "default"},
+                "media.ffmpeg.vaapi.enabled":    {"Value": false,  "Status": "default"}
+              }
+            }
+          }
+          FEOF
           sudo mkdir -p rootfs_clean/etc/firefox/policies
           sudo cp \
             rootfs_clean/usr/lib/firefox-esr/distribution/policies.json \
@@ -291,7 +281,6 @@ FEOF
             ln -sf busybox bin/$c
           done
 
-          # استخراج وحدات kernel
           for mod in squashfs loop overlay; do
             found=$(find ../rootfs_clean/lib/modules/$KVER \
               \( -name "${mod}.ko" -o -name "${mod}.ko.gz" -o -name "${mod}.ko.xz" \) \
@@ -308,70 +297,68 @@ FEOF
             fi
           done
 
-          # ✅ initramfs محسّن: persistence شامل + تحسينات
           cat > init <<'INITEOF'
-#!/bin/busybox sh
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev
+          #!/bin/busybox sh
+          mount -t proc proc /proc
+          mount -t sysfs sys /sys
+          mount -t devtmpfs dev /dev
 
-echo "[Fustuq] Loading kernel modules..."
-for m in loop squashfs overlay; do
-  [ -f "/lib/modules/${m}.ko" ] && insmod "/lib/modules/${m}.ko" 2>/dev/null
-done
+          echo "[Fustuq] Loading kernel modules..."
+          for m in loop squashfs overlay; do
+            [ -f "/lib/modules/${m}.ko" ] && insmod "/lib/modules/${m}.ko" 2>/dev/null
+          done
 
-echo "[Fustuq] Searching for boot device..."
-mkdir -p /media /newroot /persistence
-SQUASH=""
-RETRIES=0
+          echo "[Fustuq] Searching for boot device..."
+          mkdir -p /media /newroot /persistence
+          SQUASH=""
+          RETRIES=0
 
-while [ -z "$SQUASH" ] && [ "$RETRIES" -lt 5 ]; do
-  for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
-    [ -b "$dev" ] || continue
-    if mount -t iso9660 -o ro "$dev" /media 2>/dev/null; then
-      if [ -f "/media/fustuq.squashfs" ]; then
-        SQUASH="/media/fustuq.squashfs"
-        break
-      fi
-      umount /media 2>/dev/null
-    fi
-  done
-  [ -z "$SQUASH" ] && { sleep 1; RETRIES=$((RETRIES+1)); }
-done
+          while [ -z "$SQUASH" ] && [ "$RETRIES" -lt 5 ]; do
+            for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda /dev/hda /dev/nvme0n1; do
+              [ -b "$dev" ] || continue
+              if mount -t iso9660 -o ro "$dev" /media 2>/dev/null; then
+                if [ -f "/media/fustuq.squashfs" ]; then
+                  SQUASH="/media/fustuq.squashfs"
+                  break
+                fi
+                umount /media 2>/dev/null
+              fi
+            done
+            [ -z "$SQUASH" ] && { sleep 1; RETRIES=$((RETRIES+1)); }
+          done
 
-[ -z "$SQUASH" ] && { echo "[Fustuq] ERROR: squashfs not found!"; exec /bin/sh; }
+          [ -z "$SQUASH" ] && { echo "[Fustuq] ERROR: squashfs not found!"; exec /bin/sh; }
 
-echo "[Fustuq] Mounting root filesystem..."
-mount -t squashfs -o ro "$SQUASH" /newroot
+          echo "[Fustuq] Mounting root filesystem..."
+          mount -t squashfs -o ro "$SQUASH" /newroot
 
-# ✅ Persistence: البحث في جميع الأجهزة
-echo "[Fustuq] Checking for persistence layer..."
-PERSIST_DEV=""
-for dev in /dev/sd?[0-9] /dev/nvme?n?p[0-9]; do
-  [ -b "$dev" ] || continue
-  label=$(blkid -s LABEL -o value "$dev" 2>/dev/null)
-  if [ "$label" = "persistence" ]; then
-    PERSIST_DEV="$dev"
-    break
-  fi
-done
+          echo "[Fustuq] Checking for persistence layer..."
+          PERSIST_DEV=""
+          for dev in /dev/sd?[0-9] /dev/nvme?n?p[0-9]; do
+            [ -b "$dev" ] || continue
+            label=$(blkid -s LABEL -o value "$dev" 2>/dev/null)
+            if [ "$label" = "persistence" ]; then
+              PERSIST_DEV="$dev"
+              break
+            fi
+          done
 
-if [ -n "$PERSIST_DEV" ]; then
-  if mount -t ext4 "$PERSIST_DEV" /persistence 2>/dev/null; then
-    mkdir -p /persistence/upper /persistence/work
-    if mount -t overlay overlay \
-       -o lowerdir=/newroot,upperdir=/persistence/upper,workdir=/persistence/work \
-       /newroot 2>/dev/null; then
-      echo "[Fustuq] Persistence active: $PERSIST_DEV"
-    else
-      echo "[Fustuq] Persistence mount failed"
-      umount /persistence 2>/dev/null
-    fi
-  fi
-fi
+          if [ -n "$PERSIST_DEV" ]; then
+            if mount -t ext4 "$PERSIST_DEV" /persistence 2>/dev/null; then
+              mkdir -p /persistence/upper /persistence/work
+              if mount -t overlay overlay \
+                 -o lowerdir=/newroot,upperdir=/persistence/upper,workdir=/persistence/work \
+                 /newroot 2>/dev/null; then
+                echo "[Fustuq] Persistence active: $PERSIST_DEV"
+              else
+                echo "[Fustuq] Persistence mount failed"
+                umount /persistence 2>/dev/null
+              fi
+            fi
+          fi
 
-exec switch_root /newroot /sbin/init
-INITEOF
+          exec switch_root /newroot /sbin/init
+          INITEOF
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
@@ -383,14 +370,14 @@ INITEOF
         run: |
           mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
           cat > iso_root/boot/grub/grub.cfg <<'GRUBCFG'
-set timeout=1
-insmod iso9660
-insmod linux
-menuentry "Fustuq 3" {
-  linux /boot/vmlinuz quiet loglevel=0 mitigations=off nowatchdog
-  initrd /boot/initramfs
-}
-GRUBCFG
+          set timeout=1
+          insmod iso9660
+          insmod linux
+          menuentry "Fustuq 3" {
+            linux /boot/vmlinuz quiet loglevel=0 mitigations=off nowatchdog
+            initrd /boot/initramfs
+          }
+          GRUBCFG
 
           grub-mkstandalone \
             --format=i386-pc \
@@ -400,11 +387,15 @@ GRUBCFG
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img \
             > iso_root/boot/grub/eltorito.img
 
+          dd if=/dev/zero of=iso_root/boot/efiboot.img bs=1M count=10
+          mkfs.vfat iso_root/boot/efiboot.img
+          mmd -i iso_root/boot/efiboot.img ::EFI ::EFI/BOOT
           grub-mkstandalone \
             --format=x86_64-efi \
-            --output=iso_root/EFI/BOOT/BOOTX64.EFI \
+            --output=/tmp/BOOTX64.EFI \
             --install-modules="iso9660 linux normal configfile part_gpt" \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+          mcopy -i iso_root/boot/efiboot.img /tmp/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
 
       - name: Build ISO
         run: |
@@ -413,7 +404,7 @@ GRUBCFG
             -eltorito-boot boot/grub/eltorito.img \
               -no-emul-boot -boot-load-size 4 -boot-info-table \
             -eltorito-alt-boot \
-              -e EFI/BOOT/BOOTX64.EFI -no-emul-boot \
+              -e boot/efiboot.img -no-emul-boot \
             -isohybrid-gpt-basdat \
             -output Fustuq-3.iso iso_root
 
