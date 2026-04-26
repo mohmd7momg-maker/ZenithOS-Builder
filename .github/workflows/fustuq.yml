@@ -43,8 +43,7 @@ jobs:
           rc-update add connman default
           rc-update add haveged boot
 
-          # ========== تصليح الشاشة السوداء ولوحة المفاتيح ==========
-          # 1. خدمة mdev (بنية OpenRC قياسية)
+          # ---------- إعداد mdev مع coldplug ----------
           cat > /etc/init.d/mdev <<'MDEVF'
           #!/sbin/openrc-run
           description="Dynamic device management (mdev)"
@@ -52,57 +51,48 @@ jobs:
           command_args="-d"
           command_background="yes"
           pidfile="/run/mdev.pid"
-
           start_pre() {
-              ebegin "Populating /dev with existing devices"
               /sbin/mdev -s
-              eend $?
           }
           MDEVF
           chmod +x /etc/init.d/mdev
           rc-update add mdev sysinit
 
-          # 2. خدمة seatd متأخرة (مع تحديد مجموعتين وتسجيل للأخطاء)
-          cat > /etc/init.d/seatd-delayed <<'DELAYEOF'
+          # ---------- إعداد seatd (بشكل طبيعي، لكن مع انتظار الأجهزة) ----------
+          cat > /etc/init.d/seatd <<'SEATDEOF'
           #!/sbin/openrc-run
-          description="Delayed seatd start"
-          depend() { need mdev; }
-
-          start() {
-              ebegin "Starting delayed seatd"
-              sleep 1
-              # تشغيل في الخلفية مع تسجيل الأخطاء
-              seatd -g video -g input >/var/log/seatd.log 2>&1 &
-              eend $?
+          description="Seat daemon"
+          command="/usr/sbin/seatd"
+          command_args="-g video -g input"
+          command_background="yes"
+          pidfile="/run/seatd.pid"
+          start_pre() {
+              # انتظر حتى تظهر أجهزة الإدخال
+              for i in $(seq 1 10); do
+                  ls /dev/input/event* >/dev/null 2>&1 && break
+                  sleep 0.5
+              done
           }
+          SEATDEOF
+          chmod +x /etc/init.d/seatd
+          rc-update add seatd boot
 
-          stop() {
-              ebegin "Stopping delayed seatd"
-              killall seatd 2>/dev/null
-              eend $?
-          }
-          DELAYEOF
-          chmod +x /etc/init.d/seatd-delayed
-          rc-update add seatd-delayed boot
-          rc-update del seatd boot 2>/dev/null || true
-
-          # 3. مستخدم admin (المجموعات الصحيحة وإعداد doas)
+          # ---------- مستخدم admin ----------
           adduser -D admin
           for grp in wheel video input audio seat; do addgroup admin $grp; done
           passwd -d admin
           echo "permit nopass :wheel" > /etc/doas.conf
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
-          # 4. تأخير في .profile
+          # ---------- .profile مع تشغيل labwc ----------
           cat > /home/admin/.profile <<PROFILEEOF
           if [ "\$(tty)" = "/dev/tty1" ]; then
-              sleep 1
-              exec dbus-run-session labwc
+              sleep 2
+              dbus-run-session labwc
           fi
           PROFILEEOF
-          # ====================================================
 
-          # إعداد autostart
+          # ---------- إعدادات labwc ----------
           mkdir -p /home/admin/.config/labwc
           cat > /home/admin/.config/labwc/autostart <<'AUTOSTART'
           #!/bin/sh
@@ -115,15 +105,10 @@ jobs:
           AUTOSTART
           chmod +x /home/admin/.config/labwc/autostart
 
-          # اختصارات labwc
           cat > /home/admin/.config/labwc/rc.xml <<'RCEOF'
           <?xml version="1.0"?>
           <labwc_config>
-            <core>
-              <gap>2</gap>
-              <adaptiveSync>no</adaptiveSync>
-              <cursorHideAfter>2000</cursorHideAfter>
-            </core>
+            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
             <theme><name>Clearlooks</name></theme>
             <focus><followMouse>no</followMouse></focus>
             <desktops><number>1</number></desktops>
@@ -139,7 +124,6 @@ jobs:
           </labwc_config>
           RCEOF
 
-          # بيئة labwc
           cat > /home/admin/.config/labwc/environment <<'ENVEOF'
           LIBSEAT_BACKEND=seatd
           WLR_NO_HARDWARE_CURSORS=1
@@ -147,7 +131,7 @@ jobs:
           MOZ_WEBRENDER=0
           ENVEOF
 
-          # قائمة الطاقة
+          # ---------- قائمة الطاقة ----------
           mkdir -p /usr/local/bin
           cat > /usr/local/bin/fustuq-powermenu <<'PMEOF'
           #!/bin/sh
@@ -160,7 +144,7 @@ jobs:
           PMEOF
           chmod +x /usr/local/bin/fustuq-powermenu
 
-          # إعداد foot
+          # ---------- إعدادات foot و waybar ----------
           mkdir -p /home/admin/.config/foot
           cat > /home/admin/.config/foot/foot.ini <<'FOOTEOF'
           [main]
@@ -171,7 +155,6 @@ jobs:
           background=000000
           FOOTEOF
 
-          # إعداد waybar
           mkdir -p /home/admin/.config/waybar
           cat > /home/admin/.config/waybar/config <<'WEOF'
           {
@@ -211,6 +194,7 @@ jobs:
           NTFSEOF
           sudo chmod +x rootfs_clean/etc/local.d/ntfs-mount.start
 
+          # ---------- بناء initramfs مع وحدات الإدخال ----------
           mkdir -p initramfs/bin initramfs/lib/modules iso_root/boot
           cp "$(which busybox)" initramfs/bin/
           cd initramfs
@@ -219,7 +203,8 @@ jobs:
           done
 
           KVER=$(ls ../rootfs_clean/lib/modules/ | head -1)
-          for mod in squashfs loop overlay; do
+          # الوحدات الأساسية للـ squashfs + overlay + الإدخال
+          for mod in squashfs loop overlay usbhid hid_generic psmouse evdev; do
             find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" -exec cp {} lib/modules/ \;
           done
           find lib/modules/ -name "*.xz" -exec xz -d {} \;
@@ -230,7 +215,11 @@ jobs:
           mount -t proc proc /proc
           mount -t sysfs sys /sys
           mount -t devtmpfs dev /dev
+          # تحميل جميع الوحدات التي جمعناها (بما فيها الإدخال)
           for m in /lib/modules/*.ko; do [ -f "$m" ] && insmod "$m"; done
+
+          # تشغيل mdev -s مرة أخرى لإنشاء عُقد الأجهزة الجديدة
+          mdev -s
 
           sleep 5
           mkdir -p /media /newroot /persistence
@@ -273,11 +262,9 @@ jobs:
           }
           GRUBCFG
 
-          # BIOS boot
           grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub biosdisk iso9660 normal linux configfile
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
-          # UEFI boot (صورة FAT)
           dd if=/dev/zero of=iso_root/boot/efiboot.img bs=1M count=10
           mkfs.vfat iso_root/boot/efiboot.img
           mmd -i iso_root/boot/efiboot.img ::EFI ::EFI/BOOT
