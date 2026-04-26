@@ -43,7 +43,6 @@ jobs:
           rc-update add connman default
           rc-update add seatd boot
           rc-update add haveged boot
-          # udisks2 يعمل تلقائياً عبر D-Bus ولا يحتاج خدمة OpenRC
 
           # مستخدم admin
           adduser -D admin
@@ -52,7 +51,6 @@ jobs:
           echo "permit persist :wheel" > /etc/doas.conf
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
-          # إعداد autostart للجلسة
           mkdir -p /home/admin/.config/labwc
           cat > /home/admin/.config/labwc/autostart <<'AUTOSTART'
           #!/bin/sh
@@ -66,7 +64,6 @@ jobs:
           AUTOSTART
           chmod +x /home/admin/.config/labwc/autostart
 
-          # اختصارات labwc
           cat > /home/admin/.config/labwc/rc.xml <<'RCEOF'
           <?xml version="1.0"?>
           <labwc_config>
@@ -86,7 +83,6 @@ jobs:
           </labwc_config>
           RCEOF
 
-          # بيئة labwc
           cat > /home/admin/.config/labwc/environment <<'ENVEOF'
           LIBSEAT_BACKEND=seatd
           WLR_NO_HARDWARE_CURSORS=1
@@ -94,7 +90,6 @@ jobs:
           MOZ_WEBRENDER=0
           ENVEOF
 
-          # قائمة الطاقة
           mkdir -p /usr/local/bin
           cat > /usr/local/bin/fustuq-powermenu <<'PMEOF'
           #!/bin/sh
@@ -107,7 +102,6 @@ jobs:
           PMEOF
           chmod +x /usr/local/bin/fustuq-powermenu
 
-          # إعداد foot
           mkdir -p /home/admin/.config/foot
           cat > /home/admin/.config/foot/foot.ini <<'FOOTEOF'
           [main]
@@ -118,7 +112,6 @@ jobs:
           background=000000
           FOOTEOF
 
-          # إعداد waybar
           mkdir -p /home/admin/.config/waybar
           cat > /home/admin/.config/waybar/config <<'WEOF'
           {
@@ -220,9 +213,11 @@ jobs:
           }
           GRUBCFG
 
-          grub-mkstandalone -O i386-pc -o /tmp/core.img "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+          # BIOS boot: استخدام grub-mkimage لتوليد core.img صغيرة الحجم
+          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub biosdisk iso9660 normal linux configfile
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
+          # UEFI boot (صورة FAT)
           dd if=/dev/zero of=iso_root/boot/efiboot.img bs=1M count=10
           mkfs.vfat iso_root/boot/efiboot.img
           mmd -i iso_root/boot/efiboot.img ::EFI ::EFI/BOOT
