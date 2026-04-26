@@ -41,16 +41,68 @@ jobs:
           rc-update add dbus default
           rc-update add elogind default
           rc-update add connman default
-          rc-update add seatd boot
           rc-update add haveged boot
 
-          # مستخدم admin
+          # ========== تصليح الشاشة السوداء ولوحة المفاتيح ==========
+          # 1. خدمة mdev (بنية OpenRC قياسية)
+          cat > /etc/init.d/mdev <<'MDEVF'
+          #!/sbin/openrc-run
+          description="Dynamic device management (mdev)"
+          command="/sbin/mdev"
+          command_args="-d"
+          command_background="yes"
+          pidfile="/run/mdev.pid"
+
+          start_pre() {
+              ebegin "Populating /dev with existing devices"
+              /sbin/mdev -s
+              eend $?
+          }
+          MDEVF
+          chmod +x /etc/init.d/mdev
+          rc-update add mdev sysinit
+
+          # 2. خدمة seatd متأخرة (مع تحديد مجموعتين وتسجيل للأخطاء)
+          cat > /etc/init.d/seatd-delayed <<'DELAYEOF'
+          #!/sbin/openrc-run
+          description="Delayed seatd start"
+          depend() { need mdev; }
+
+          start() {
+              ebegin "Starting delayed seatd"
+              sleep 1
+              # تشغيل في الخلفية مع تسجيل الأخطاء
+              seatd -g video -g input >/var/log/seatd.log 2>&1 &
+              eend $?
+          }
+
+          stop() {
+              ebegin "Stopping delayed seatd"
+              killall seatd 2>/dev/null
+              eend $?
+          }
+          DELAYEOF
+          chmod +x /etc/init.d/seatd-delayed
+          rc-update add seatd-delayed boot
+          rc-update del seatd boot 2>/dev/null || true
+
+          # 3. مستخدم admin (المجموعات الصحيحة وإعداد doas)
           adduser -D admin
-          for grp in wheel video input audio; do addgroup admin $grp; done
+          for grp in wheel video input audio seat; do addgroup admin $grp; done
           passwd -d admin
-          echo "permit persist :wheel" > /etc/doas.conf
+          echo "permit nopass :wheel" > /etc/doas.conf
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
+          # 4. تأخير في .profile
+          cat > /home/admin/.profile <<PROFILEEOF
+          if [ "\$(tty)" = "/dev/tty1" ]; then
+              sleep 1
+              exec dbus-run-session labwc
+          fi
+          PROFILEEOF
+          # ====================================================
+
+          # إعداد autostart
           mkdir -p /home/admin/.config/labwc
           cat > /home/admin/.config/labwc/autostart <<'AUTOSTART'
           #!/bin/sh
@@ -58,16 +110,20 @@ jobs:
           pipewire &
           pipewire-pulse &
           wireplumber &
-          waybar &
+          sleep 0.5 && waybar &
           mako &
-          wlsunset -l 36.7 -L 3.0 &
           AUTOSTART
           chmod +x /home/admin/.config/labwc/autostart
 
+          # اختصارات labwc
           cat > /home/admin/.config/labwc/rc.xml <<'RCEOF'
           <?xml version="1.0"?>
           <labwc_config>
-            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
+            <core>
+              <gap>2</gap>
+              <adaptiveSync>no</adaptiveSync>
+              <cursorHideAfter>2000</cursorHideAfter>
+            </core>
             <theme><name>Clearlooks</name></theme>
             <focus><followMouse>no</followMouse></focus>
             <desktops><number>1</number></desktops>
@@ -83,6 +139,7 @@ jobs:
           </labwc_config>
           RCEOF
 
+          # بيئة labwc
           cat > /home/admin/.config/labwc/environment <<'ENVEOF'
           LIBSEAT_BACKEND=seatd
           WLR_NO_HARDWARE_CURSORS=1
@@ -90,6 +147,7 @@ jobs:
           MOZ_WEBRENDER=0
           ENVEOF
 
+          # قائمة الطاقة
           mkdir -p /usr/local/bin
           cat > /usr/local/bin/fustuq-powermenu <<'PMEOF'
           #!/bin/sh
@@ -102,6 +160,7 @@ jobs:
           PMEOF
           chmod +x /usr/local/bin/fustuq-powermenu
 
+          # إعداد foot
           mkdir -p /home/admin/.config/foot
           cat > /home/admin/.config/foot/foot.ini <<'FOOTEOF'
           [main]
@@ -112,6 +171,7 @@ jobs:
           background=000000
           FOOTEOF
 
+          # إعداد waybar
           mkdir -p /home/admin/.config/waybar
           cat > /home/admin/.config/waybar/config <<'WEOF'
           {
@@ -213,7 +273,7 @@ jobs:
           }
           GRUBCFG
 
-          # BIOS boot: استخدام grub-mkimage لتوليد core.img صغيرة الحجم
+          # BIOS boot
           grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub biosdisk iso9660 normal linux configfile
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
