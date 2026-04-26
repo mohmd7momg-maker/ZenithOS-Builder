@@ -1,4 +1,4 @@
-name: فستق 3 (Verified & Fixed)
+name: فستق 3 (Verified Edition)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tools
+      - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -18,47 +18,122 @@ jobs:
             grub-common mtools wget cpio util-linux busybox-static \
             ca-certificates dosfstools rsync xz-utils
 
-      - name: Download Alpine RootFS
+      - name: Download Alpine rootfs
         run: |
           wget -q -O rootfs.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
           mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      - name: System Synthesis (Chroot Build)
-        run: |
+      - name: Build system in chroot
+        run: |2
           sudo tee rootfs/build.sh > /dev/null <<'BUILDSCRIPT'
           #!/bin/sh -ex
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
           apk update
-          
-          # تم حذف connman-gtk المسببة للفشل وإضافة تعريفات شاملة
-          apk add --no-cache linux-lts linux-firmware-all alpine-base openrc bash doas \
+          apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas \
             dbus elogind connman seatd util-linux labwc waybar foot wofi \
             thunar thunar-volman firefox-esr mesa-dri-gallium intel-media-driver \
             font-noto ttf-dejavu adwaita-icon-theme haveged polkit-gnome gvfs udisks2 \
-            pipewire wireplumber pavucontrol imv mako wl-clipboard clipman grim slurp \
-            zathura zathura-pdf-mupdf vis wlsunset pciutils usbutils ntfs-3g tzdata
-          
+            pipewire wireplumber pavucontrol imv mako wl-clipboard grim slurp \
+            zathura zathura-pdf-mupdf wlsunset pciutils usbutils ntfs-3g tzdata
+
           rc-update add dbus default
           rc-update add elogind default
           rc-update add connman default
           rc-update add seatd boot
           rc-update add haveged boot
-          rc-update add udisks2 default
+          # udisks2 يعمل تلقائياً عبر D-Bus ولا يحتاج خدمة OpenRC
 
-          # إعداد مستخدم admin ودخول تلقائي
+          # مستخدم admin
           adduser -D admin
           for grp in wheel video input audio; do addgroup admin $grp; done
           passwd -d admin
           echo "permit persist :wheel" > /etc/doas.conf
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
-          
-          # إعداد ملف الـ Profile للإقلاع الرسومي
-          echo 'if [ "$(tty)" = "/dev/tty1" ]; then exec dbus-run-session labwc; fi' > /home/admin/.profile
-          chown admin:admin /home/admin/.profile
+
+          # إعداد autostart للجلسة
+          mkdir -p /home/admin/.config/labwc
+          cat > /home/admin/.config/labwc/autostart <<'AUTOSTART'
+          #!/bin/sh
+          /usr/libexec/polkit-gnome-authentication-agent-1 &
+          pipewire &
+          pipewire-pulse &
+          wireplumber &
+          waybar &
+          mako &
+          wlsunset -l 36.7 -L 3.0 &
+          AUTOSTART
+          chmod +x /home/admin/.config/labwc/autostart
+
+          # اختصارات labwc
+          cat > /home/admin/.config/labwc/rc.xml <<'RCEOF'
+          <?xml version="1.0"?>
+          <labwc_config>
+            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
+            <theme><name>Clearlooks</name></theme>
+            <focus><followMouse>no</followMouse></focus>
+            <desktops><number>1</number></desktops>
+            <keyboard>
+              <keybind key="A-Return"><action name="Execute" command="foot"/></keybind>
+              <keybind key="A-e"><action name="Execute" command="thunar"/></keybind>
+              <keybind key="A-q"><action name="CloseWindow"/></keybind>
+              <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
+              <keybind key="A-v"><action name="Execute" command="pavucontrol"/></keybind>
+              <keybind key="Print"><action name="Execute" command="sh -c 'grim -g &quot;$(slurp)&quot; - | wl-copy'"/></keybind>
+              <keybind key="A-Escape"><action name="Execute" command="fustuq-powermenu"/></keybind>
+            </keyboard>
+          </labwc_config>
+          RCEOF
+
+          # بيئة labwc
+          cat > /home/admin/.config/labwc/environment <<'ENVEOF'
+          LIBSEAT_BACKEND=seatd
+          WLR_NO_HARDWARE_CURSORS=1
+          MOZ_DISABLE_RDD_SANDBOX=1
+          MOZ_WEBRENDER=0
+          ENVEOF
+
+          # قائمة الطاقة
+          mkdir -p /usr/local/bin
+          cat > /usr/local/bin/fustuq-powermenu <<'PMEOF'
+          #!/bin/sh
+          choice=$(printf "Shutdown\nReboot\nExit" | wofi --dmenu --prompt "Power Menu")
+          case "$choice" in
+            Shutdown) doas poweroff ;;
+            Reboot)   doas reboot   ;;
+            Exit)     labwc -e      ;;
+          esac
+          PMEOF
+          chmod +x /usr/local/bin/fustuq-powermenu
+
+          # إعداد foot
+          mkdir -p /home/admin/.config/foot
+          cat > /home/admin/.config/foot/foot.ini <<'FOOTEOF'
+          [main]
+          font=monospace:size=10
+          pad=10x10
+          [colors]
+          alpha=0.85
+          background=000000
+          FOOTEOF
+
+          # إعداد waybar
+          mkdir -p /home/admin/.config/waybar
+          cat > /home/admin/.config/waybar/config <<'WEOF'
+          {
+            "layer": "top", "height": 24,
+            "modules-left": [], "modules-center": ["clock"], "modules-right": ["cpu","memory"],
+            "clock":  {"format": " {:%H:%M  %d/%m/%Y}", "tooltip": false},
+            "cpu":    {"format": " CPU:{usage}%",        "interval": 5,  "tooltip": false},
+            "memory": {"format": " RAM:{used:0.1f}G",    "interval": 10, "tooltip": false}
+          }
+          WEOF
+
+          chown -R admin:admin /home/admin/.config
+          rm -rf /usr/share/man /usr/share/doc /usr/share/info /var/cache/apk/*
           BUILDSCRIPT
-          
+
           sudo chmod +x rootfs/build.sh
           for d in proc sys dev run; do sudo mount --bind /$d rootfs/$d; done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
@@ -66,98 +141,102 @@ jobs:
           sudo rm -f rootfs/build.sh
           for d in run dev sys proc; do sudo umount -lf rootfs/$d 2>/dev/null || true; done
 
-      - name: Optimization & GUI Config
+      - name: Prepare rootfs and initramfs
         run: |
           sudo mkdir -p rootfs_clean
           sudo rsync -a --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp rootfs/ rootfs_clean/
-          
-          # إعداد واجهة Labwc تلقائياً
-          sudo mkdir -p rootfs_clean/home/admin/.config/labwc
-          sudo tee rootfs_clean/home/admin/.config/labwc/autostart > /dev/null <<'AS'
-          /usr/libexec/polkit-gnome-authentication-agent-1 &
-          pipewire &
-          wireplumber &
-          waybar &
-          mako &
-          AS
-          sudo chown -R 1000:1000 rootfs_clean/home/admin/.config
 
-          # حماية أقراص ويندوز (القراءة فقط)
           sudo mkdir -p rootfs_clean/etc/local.d
-          sudo tee rootfs_clean/etc/local.d/ntfs.start > /dev/null <<'NTFS'
+          sudo tee rootfs_clean/etc/local.d/ntfs-mount.start > /dev/null <<'NTFSEOF'
           #!/bin/sh
-          for dev in $(lsblk -pno NAME,FSTYPE | grep ntfs | awk '{print $1}'); do
-            mkdir -p /media/Win_$(basename $dev)
-            mount -t ntfs-3g -o ro,force,nls=utf8 "$dev" /media/Win_$(basename $dev) 2>/dev/null
+          sleep 3
+          for dev in $(lsblk -pno NAME,FSTYPE | awk '$2~/ntfs/{print $1}'); do
+              mnt="/media/Windows_$(basename $dev)"
+              mkdir -p "$mnt"
+              mount -t ntfs-3g -o ro,force,nls=utf8 "$dev" "$mnt" 2>/dev/null
           done
-          NTFS
-          sudo chmod +x rootfs_clean/etc/local.d/ntfs.start
-          sudo chroot rootfs_clean rc-update add local default
+          NTFSEOF
+          sudo chmod +x rootfs_clean/etc/local.d/ntfs-mount.start
 
-      - name: Build Initramfs (Persistence Fixed)
-        run: |
           mkdir -p initramfs/bin initramfs/lib/modules iso_root/boot
           cp "$(which busybox)" initramfs/bin/
           cd initramfs
-          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod blkid find; do ln -sf busybox bin/$c; done
-          
-          # جلب موديلات النواة لفك الضغط والإقلاع
+          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod blkid; do
+            ln -sf busybox bin/$c
+          done
+
           KVER=$(ls ../rootfs_clean/lib/modules/ | head -1)
-          for m in squashfs loop overlay fuse; do
-            find ../rootfs_clean/lib/modules/$KVER -name "${m}.ko*" -exec cp {} lib/modules/ \;
+          for mod in squashfs loop overlay; do
+            find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" -exec cp {} lib/modules/ \;
           done
           find lib/modules/ -name "*.xz" -exec xz -d {} \;
           find lib/modules/ -name "*.gz" -exec gunzip {} \;
 
-          cat > init <<'INIT'
+          cat > init <<'INITEOF'
           #!/bin/busybox sh
           mount -t proc proc /proc
           mount -t sysfs sys /sys
           mount -t devtmpfs dev /dev
-          for m in /lib/modules/*.ko; do insmod $m 2>/dev/null; done
+          for m in /lib/modules/*.ko; do [ -f "$m" ] && insmod "$m"; done
+
           sleep 5
           mkdir -p /media /newroot /persistence
-          for d in /dev/sd* /dev/sr* /dev/nvme*; do
-            mount -t iso9660 -o ro $d /media 2>/dev/null || mount -t vfat -o ro $d /media 2>/dev/null
-            if [ -f /media/fustuq.squashfs ]; then SQUASH="/media/fustuq.squashfs"; break; fi
-            umount /media 2>/dev/null
+          SQUASH=""
+          for dev in /dev/sd* /dev/sr* /dev/nvme*; do
+             mount -t iso9660 -o ro $dev /media 2>/dev/null || mount -t vfat -o ro $dev /media 2>/dev/null
+             if [ -f "/media/fustuq.squashfs" ]; then SQUASH="/media/fustuq.squashfs"; break; fi
+             umount /media 2>/dev/null
           done
+          [ -z "$SQUASH" ] && { echo "ERROR: squashfs not found"; exec /bin/sh; }
+
           mount -t squashfs -o ro "$SQUASH" /newroot
-          
-          # دعم الحفظ المستمر عبر Rufus
-          P_DEV=$(blkid | grep 'LABEL="persistence"' | cut -d: -f1 | head -1)
+
+          P_DEV=$(blkid | grep "LABEL=\"persistence\"" | cut -d: -f1 | head -1)
           if [ -n "$P_DEV" ]; then
-            mount -t ext4 "$P_DEV" /persistence && \
-            mkdir -p /persistence/u /persistence/w && \
-            mount -t overlay overlay -o lowerdir=/newroot,upperdir=/persistence/u,workdir=/persistence/w /newroot
+             mount -t ext4 "$P_DEV" /persistence && \
+             mkdir -p /persistence/u /persistence/w && \
+             mount -t overlay overlay -o lowerdir=/newroot,upperdir=/persistence/u,workdir=/persistence/w /newroot
           fi
           exec switch_root /newroot /sbin/init
-          INIT
+          INITEOF
+
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      - name: Final ISO Assembly
+      - name: Build ISO
         run: |
           sudo cp $(ls rootfs_clean/boot/vmlinuz-lts) iso_root/boot/vmlinuz
-          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -noappend -comp zstd
-          
+          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -noappend -comp zstd -Xcompression-level 3
+
           mkdir -p iso_root/boot/grub
-          echo 'set timeout=1
+          cat > iso_root/boot/grub/grub.cfg <<'GRUBCFG'
+          set timeout=1
+          insmod iso9660
+          insmod linux
           menuentry "Fustuq 3 (Stable)" {
             linux /boot/vmlinuz quiet loglevel=3 mitigations=off
             initrd /boot/initramfs
-          }' > iso_root/boot/grub/grub.cfg
+          }
+          GRUBCFG
 
           grub-mkstandalone -O i386-pc -o /tmp/core.img "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
-          
+
+          dd if=/dev/zero of=iso_root/boot/efiboot.img bs=1M count=10
+          mkfs.vfat iso_root/boot/efiboot.img
+          mmd -i iso_root/boot/efiboot.img ::EFI ::EFI/BOOT
+          grub-mkstandalone -O x86_64-efi -o /tmp/BOOTX64.EFI "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+          mcopy -i iso_root/boot/efiboot.img /tmp/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+
           xorriso -as mkisofs -volid "FUSTUQ_3" -iso-level 3 \
             -eltorito-boot boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
-            -output Fustuq-3-Final.iso iso_root
+            -eltorito-alt-boot -e boot/efiboot.img -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output Fustuq-3.iso iso_root
 
-      - name: Upload ISO
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Fustuq-3-Verified
-          path: Fustuq-3-Final.iso
+          name: فستق-3-ISO
+          path: Fustuq-3.iso
