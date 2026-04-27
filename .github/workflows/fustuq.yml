@@ -1,4 +1,4 @@
-name: فستق 3 (Verified Edition)
+name: فستق 3 (Final Production)
 
 on:
   workflow_dispatch:
@@ -6,279 +6,255 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: تثبيت أدوات البناء
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
-            grub-common mtools wget cpio util-linux busybox-static \
-            ca-certificates dosfstools rsync xz-utils
+            grub-efi-ia32-bin grub-common mtools wget cpio util-linux \
+            busybox-static ca-certificates dosfstools rsync xz-utils zstd
 
-      - name: Download Alpine rootfs
+      - name: تجهيز نظام الملفات الأساسي
         run: |
-          wget -q -O rootfs.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
+          wget -q -O rootfs.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
           mkdir -p rootfs
           sudo tar xzf rootfs.tar.gz -C rootfs
 
-      - name: Build system in chroot
-        run: |2
+      - name: بناء النظام (chroot)
+        run: |
           sudo tee rootfs/build.sh > /dev/null <<'BUILDSCRIPT'
           #!/bin/sh -ex
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
           apk update
-          apk add --no-cache linux-lts linux-firmware alpine-base openrc bash doas \
-            dbus elogind connman seatd util-linux labwc waybar foot wofi \
-            thunar thunar-volman firefox-esr mesa-dri-gallium intel-media-driver \
-            font-noto ttf-dejavu adwaita-icon-theme haveged polkit-gnome gvfs udisks2 \
-            pipewire wireplumber pavucontrol imv mako wl-clipboard grim slurp \
-            zathura zathura-pdf-mupdf wlsunset pciutils usbutils ntfs-3g tzdata
 
-          rc-update add dbus default
-          rc-update add elogind default
-          rc-update add connman default
-          rc-update add haveged boot
+          # حزم خفيفة: linux-firmware-none بدلاً من linux-firmware (حجم أقل من 500MB)
+          apk add --no-cache \
+            linux-lts linux-firmware-none alpine-base openrc bash doas \
+            dbus elogind polkit-gnome seatd util-linux zstd \
+            labwc waybar foot wofi swaybg swaylock \
+            thunar thunar-volman gvfs gvfs-archive \
+            firefox-esr mesa-dri-gallium intel-media-driver \
+            font-noto ttf-dejavu font-awesome adwaita-icon-theme papirus-icon-theme \
+            haveged pipewire pipewire-pulse wireplumber pavucontrol \
+            imv mako wl-clipboard clipman grim slurp \
+            zathura zathura-pdf-mupdf wlsunset \
+            nano htop pciutils usbutils ntfs-3g dosfstools \
+            tzdata connman jq
 
-          # ---------- إعداد mdev مع coldplug ----------
-          cat > /etc/init.d/mdev <<'MDEVF'
+          # تفعيل الخدمات الصحيحة
+          for s in dbus elogind connman seatd haveged local; do
+            rc-update add $s default
+          done
+
+          # zram ديناميكي
+          cat > /etc/init.d/fustuq-zram <<'ZRAMEOF'
           #!/sbin/openrc-run
-          description="Dynamic device management (mdev)"
-          command="/sbin/mdev"
-          command_args="-d"
-          command_background="yes"
-          pidfile="/run/mdev.pid"
-          start_pre() {
-              /sbin/mdev -s
+          description="Fustuq dynamic zram swap"
+          depend() { need sysfs; before swap; }
+          start() {
+              modprobe zram num_devices=1 2>/dev/null || true
+              echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || \
+              echo lzo > /sys/block/zram0/comp_algorithm 2>/dev/null
+              MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+              SIZE_MB=$((MEM_KB / 2 / 1024))
+              [ "$SIZE_MB" -gt 2048 ] && SIZE_MB=2048
+              echo "${SIZE_MB}M" > /sys/block/zram0/disksize
+              mkswap /dev/zram0 >/dev/null
+              swapon -p 100 /dev/zram0
+              eend $?
           }
-          MDEVF
-          chmod +x /etc/init.d/mdev
-          rc-update add mdev sysinit
+          ZRAMEOF
+          chmod +x /etc/init.d/fustuq-zram
+          rc-update add fustuq-zram boot
 
-          # ---------- إعداد seatd (بشكل طبيعي، لكن مع انتظار الأجهزة) ----------
-          cat > /etc/init.d/seatd <<'SEATDEOF'
-          #!/sbin/openrc-run
-          description="Seat daemon"
-          command="/usr/sbin/seatd"
-          command_args="-g video -g input"
-          command_background="yes"
-          pidfile="/run/seatd.pid"
-          start_pre() {
-              # انتظر حتى تظهر أجهزة الإدخال
-              for i in $(seq 1 10); do
-                  ls /dev/input/event* >/dev/null 2>&1 && break
-                  sleep 0.5
-              done
-          }
-          SEATDEOF
-          chmod +x /etc/init.d/seatd
-          rc-update add seatd boot
-
-          # ---------- مستخدم admin ----------
+          # إعداد المستخدم admin مع مجموعة seat
           adduser -D admin
-          for grp in wheel video input audio seat; do addgroup admin $grp; done
+          for grp in wheel video input audio plugdev netdev seat; do
+            addgroup admin $grp
+          done
           passwd -d admin
-          echo "permit nopass :wheel" > /etc/doas.conf
+          echo "permit persist :wheel" > /etc/doas.conf
           echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
 
-          # ---------- .profile مع تشغيل labwc ----------
-          cat > /home/admin/.profile <<PROFILEEOF
-          if [ "\$(tty)" = "/dev/tty1" ]; then
-              sleep 2
-              dbus-run-session labwc
-          fi
+          # تشغيل الواجهة تلقائياً بعد التأكد من جاهزية seatd
+          cat > /home/admin/.profile <<'PROFILEEOF'
+          # انتظر حتى يظهر مقبس seatd (يمنع الشاشة السوداء)
+          while [ ! -e /run/seatd.sock ]; do sleep 0.5; done
+          exec dbus-run-session labwc
           PROFILEEOF
 
-          # ---------- إعدادات labwc ----------
           mkdir -p /home/admin/.config/labwc
-          cat > /home/admin/.config/labwc/autostart <<'AUTOSTART'
+          cat > /home/admin/.config/labwc/autostart <<'AS'
           #!/bin/sh
           /usr/libexec/polkit-gnome-authentication-agent-1 &
-          pipewire &
-          pipewire-pulse &
-          wireplumber &
-          sleep 0.5 && waybar &
-          mako &
-          AUTOSTART
+          pipewire & pipewire-pulse & wireplumber &
+          sleep 1 && waybar & mako &
+          swaybg -c '#1e1e2e' -m solid &
+          AS
           chmod +x /home/admin/.config/labwc/autostart
 
-          cat > /home/admin/.config/labwc/rc.xml <<'RCEOF'
-          <?xml version="1.0"?>
-          <labwc_config>
-            <core><gap>2</gap><adaptiveSync>no</adaptiveSync></core>
-            <theme><name>Clearlooks</name></theme>
-            <focus><followMouse>no</followMouse></focus>
-            <desktops><number>1</number></desktops>
-            <keyboard>
-              <keybind key="A-Return"><action name="Execute" command="foot"/></keybind>
-              <keybind key="A-e"><action name="Execute" command="thunar"/></keybind>
-              <keybind key="A-q"><action name="CloseWindow"/></keybind>
-              <keybind key="A-d"><action name="Execute" command="wofi --show drun"/></keybind>
-              <keybind key="A-v"><action name="Execute" command="pavucontrol"/></keybind>
-              <keybind key="Print"><action name="Execute" command="sh -c 'grim -g &quot;$(slurp)&quot; - | wl-copy'"/></keybind>
-              <keybind key="A-Escape"><action name="Execute" command="fustuq-powermenu"/></keybind>
-            </keyboard>
-          </labwc_config>
-          RCEOF
+          # تغيير ملكية جميع ملفات admin لضمان الحفظ
+          chown -R admin:admin /home/admin
 
-          cat > /home/admin/.config/labwc/environment <<'ENVEOF'
-          LIBSEAT_BACKEND=seatd
-          WLR_NO_HARDWARE_CURSORS=1
-          MOZ_DISABLE_RDD_SANDBOX=1
-          MOZ_WEBRENDER=0
-          ENVEOF
-
-          # ---------- قائمة الطاقة ----------
-          mkdir -p /usr/local/bin
-          cat > /usr/local/bin/fustuq-powermenu <<'PMEOF'
-          #!/bin/sh
-          choice=$(printf "Shutdown\nReboot\nExit" | wofi --dmenu --prompt "Power Menu")
-          case "$choice" in
-            Shutdown) doas poweroff ;;
-            Reboot)   doas reboot   ;;
-            Exit)     labwc -e      ;;
-          esac
-          PMEOF
-          chmod +x /usr/local/bin/fustuq-powermenu
-
-          # ---------- إعدادات foot و waybar ----------
-          mkdir -p /home/admin/.config/foot
-          cat > /home/admin/.config/foot/foot.ini <<'FOOTEOF'
-          [main]
-          font=monospace:size=10
-          pad=10x10
-          [colors]
-          alpha=0.85
-          background=000000
-          FOOTEOF
-
-          mkdir -p /home/admin/.config/waybar
-          cat > /home/admin/.config/waybar/config <<'WEOF'
-          {
-            "layer": "top", "height": 24,
-            "modules-left": [], "modules-center": ["clock"], "modules-right": ["cpu","memory"],
-            "clock":  {"format": " {:%H:%M  %d/%m/%Y}", "tooltip": false},
-            "cpu":    {"format": " CPU:{usage}%",        "interval": 5,  "tooltip": false},
-            "memory": {"format": " RAM:{used:0.1f}G",    "interval": 10, "tooltip": false}
-          }
-          WEOF
-
-          chown -R admin:admin /home/admin/.config
-          rm -rf /usr/share/man /usr/share/doc /usr/share/info /var/cache/apk/*
+          # تنظيف نهائي
+          rm -rf /var/cache/apk/* /usr/share/man
           BUILDSCRIPT
 
           sudo chmod +x rootfs/build.sh
           for d in proc sys dev run; do sudo mount --bind /$d rootfs/$d; done
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
           sudo chroot rootfs /build.sh
-          sudo rm -f rootfs/build.sh
-          for d in run dev sys proc; do sudo umount -lf rootfs/$d 2>/dev/null || true; done
+          sudo rm rootfs/etc/resolv.conf
+          for d in run dev sys proc; do sudo umount -lf rootfs/$d; done
 
-      - name: Prepare rootfs and initramfs
+      - name: تنظيف RootFS النهائي
         run: |
           sudo mkdir -p rootfs_clean
-          sudo rsync -a --exclude proc --exclude sys --exclude dev --exclude run --exclude tmp rootfs/ rootfs_clean/
+          sudo rsync -a \
+            --exclude='/proc/*' \
+            --exclude='/sys/*' \
+            --exclude='/dev/*' \
+            --exclude='/run/*' \
+            --exclude='/tmp/*' \
+            --exclude='/mnt/*' \
+            --exclude='/media/*' \
+            rootfs/ rootfs_clean/
 
+          # سكربت تثبيت NTFS تلقائي (آمن للقراءة فقط)
           sudo mkdir -p rootfs_clean/etc/local.d
-          sudo tee rootfs_clean/etc/local.d/ntfs-mount.start > /dev/null <<'NTFSEOF'
+          sudo tee rootfs_clean/etc/local.d/ntfs.start > /dev/null <<'NTFS'
           #!/bin/sh
-          sleep 3
-          for dev in $(lsblk -pno NAME,FSTYPE | awk '$2~/ntfs/{print $1}'); do
-              mnt="/media/Windows_$(basename $dev)"
-              mkdir -p "$mnt"
-              mount -t ntfs-3g -o ro,force,nls=utf8 "$dev" "$mnt" 2>/dev/null
+          sleep 5
+          lsblk -pno NAME,FSTYPE | awk '$2=="ntfs"{print $1}' | while read dev; do
+            mnt="/media/win_$(basename $dev)"
+            mkdir -p "$mnt"
+            mount -t ntfs-3g -o ro,force,nls=utf8 "$dev" "$mnt" 2>/dev/null
           done
-          NTFSEOF
-          sudo chmod +x rootfs_clean/etc/local.d/ntfs-mount.start
+          NTFS
+          sudo chmod +x rootfs_clean/etc/local.d/ntfs.start
 
-          # ---------- بناء initramfs مع وحدات الإدخال ----------
-          mkdir -p initramfs/bin initramfs/lib/modules iso_root/boot
+      - name: بناء Initramfs المحسّنة
+        run: |
+          mkdir -p initramfs/{bin,lib/modules,proc,sys,dev,media,newroot,persistence}
           cp "$(which busybox)" initramfs/bin/
           cd initramfs
-          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod blkid; do
+          for c in sh mount cat ls grep umount switch_root mkdir sleep insmod blkid gunzip xz zstd mdev; do
             ln -sf busybox bin/$c
           done
 
-          KVER=$(ls ../rootfs_clean/lib/modules/ | head -1)
-          # الوحدات الأساسية للـ squashfs + overlay + الإدخال
-          for mod in squashfs loop overlay usbhid hid_generic psmouse evdev; do
-            find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" -exec cp {} lib/modules/ \;
-          done
-          find lib/modules/ -name "*.xz" -exec xz -d {} \;
-          find lib/modules/ -name "*.gz" -exec gunzip {} \;
+          KVER=$(ls ../rootfs_clean/lib/modules/ | sort -V | tail -1)
+          echo "النواة: $KVER"
 
-          cat > init <<'INITEOF'
+          # استخراج الموديلات الضرورية (مفكوكة الضغط)
+          for mod in squashfs loop overlay usbhid hid_generic evdev psmouse; do
+            src=$(find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" | head -1)
+            [ -z "$src" ] && continue
+            case "$src" in
+              *.xz) xz -d -c "$src" > lib/modules/${mod}.ko ;;
+              *.gz) gunzip -c "$src" > lib/modules/${mod}.ko ;;
+              *.zst) zstd -d -c "$src" > lib/modules/${mod}.ko ;;
+              *) cp "$src" lib/modules/${mod}.ko ;;
+            esac
+          done
+
+          cat > init <<'INIT'
           #!/bin/busybox sh
           mount -t proc proc /proc
           mount -t sysfs sys /sys
           mount -t devtmpfs dev /dev
-          # تحميل جميع الوحدات التي جمعناها (بما فيها الإدخال)
-          for m in /lib/modules/*.ko; do [ -f "$m" ] && insmod "$m"; done
-
-          # تشغيل mdev -s مرة أخرى لإنشاء عُقد الأجهزة الجديدة
           mdev -s
 
-          sleep 5
-          mkdir -p /media /newroot /persistence
+          # تحميل جميع الموديلات الموجودة
+          for m in /lib/modules/*.ko; do insmod "$m" 2>/dev/null; done
+
           SQUASH=""
-          for dev in /dev/sd* /dev/sr* /dev/nvme*; do
-             mount -t iso9660 -o ro $dev /media 2>/dev/null || mount -t vfat -o ro $dev /media 2>/dev/null
-             if [ -f "/media/fustuq.squashfs" ]; then SQUASH="/media/fustuq.squashfs"; break; fi
-             umount /media 2>/dev/null
+          for i in 1 2 3 4 5; do
+            for dev in /dev/sd* /dev/sr* /dev/vd* /dev/nvme*; do
+              [ -b "$dev" ] || continue
+              mount -o ro "$dev" /media 2>/dev/null || continue
+              if [ -f /media/fustuq.squashfs ]; then
+                SQUASH="/media/fustuq.squashfs"
+                break
+              fi
+              umount /media 2>/dev/null
+            done
+            [ -n "$SQUASH" ] && break
+            sleep 1
           done
-          [ -z "$SQUASH" ] && { echo "ERROR: squashfs not found"; exec /bin/sh; }
+
+          [ -z "$SQUASH" ] && exec /bin/sh
 
           mount -t squashfs -o ro "$SQUASH" /newroot
 
-          P_DEV=$(blkid | grep "LABEL=\"persistence\"" | cut -d: -f1 | head -1)
+          # التراكم (Persistence) – قسم ext4 معنون "persistence"
+          P_DEV=$(blkid -L persistence 2>/dev/null)
           if [ -n "$P_DEV" ]; then
-             mount -t ext4 "$P_DEV" /persistence && \
-             mkdir -p /persistence/u /persistence/w && \
-             mount -t overlay overlay -o lowerdir=/newroot,upperdir=/persistence/u,workdir=/persistence/w /newroot
+            mount "$P_DEV" /persistence && mkdir -p /persistence/u /persistence/w
+            mount -t overlay overlay -o lowerdir=/newroot,upperdir=/persistence/u,workdir=/persistence/w /newroot
           fi
-          exec switch_root /newroot /sbin/init
-          INITEOF
 
+          exec switch_root /newroot /sbin/init
+          INIT
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
 
-      - name: Build ISO
+      - name: بناء ISO متعدد الإقلاع (BIOS & UEFI) مع دعم Ventoy
         run: |
-          sudo cp $(ls rootfs_clean/boot/vmlinuz-lts) iso_root/boot/vmlinuz
-          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -noappend -comp zstd -Xcompression-level 3
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
 
-          mkdir -p iso_root/boot/grub
-          cat > iso_root/boot/grub/grub.cfg <<'GRUBCFG'
-          set timeout=1
-          insmod iso9660
-          insmod linux
-          menuentry "Fustuq 3 (Stable)" {
+          cat > iso_root/boot/grub/grub.cfg <<'GRUB'
+          set timeout=3
+          menuentry "Fustuq 3 (Standard)" {
             linux /boot/vmlinuz quiet loglevel=3 mitigations=off
             initrd /boot/initramfs
           }
-          GRUBCFG
+          menuentry "Fustuq 3 (Safe Mode / Nomodeset)" {
+            linux /boot/vmlinuz quiet nomodeset mitigations=off
+            initrd /boot/initramfs
+          }
+          GRUB
 
-          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub biosdisk iso9660 normal linux configfile
+          # BIOS
+          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
+            biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
-          dd if=/dev/zero of=iso_root/boot/efiboot.img bs=1M count=10
-          mkfs.vfat iso_root/boot/efiboot.img
-          mmd -i iso_root/boot/efiboot.img ::EFI ::EFI/BOOT
-          grub-mkstandalone -O x86_64-efi -o /tmp/BOOTX64.EFI "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
-          mcopy -i iso_root/boot/efiboot.img /tmp/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+          # UEFI مع صورة FAT
+          grub-mkstandalone -O x86_64-efi -o iso_root/EFI/BOOT/BOOTX64.EFI \
+            --install-modules="iso9660 linux normal configfile part_gpt part_msdos fat" \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
 
-          xorriso -as mkisofs -volid "FUSTUQ_3" -iso-level 3 \
-            -eltorito-boot boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
-            -eltorito-alt-boot -e boot/efiboot.img -no-emul-boot \
-            -isohybrid-gpt-basdat \
+          truncate -s 16M /tmp/efi.img
+          mkfs.vfat -n "EFI_BOOT" /tmp/efi.img
+          mmd -i /tmp/efi.img ::/EFI ::/EFI/BOOT
+          mcopy -i /tmp/efi.img iso_root/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/
+          cp /tmp/efi.img iso_root/boot/grub/efi.img
+
+          # دعم Ventoy (ملف علامة)
+          touch iso_root/ventoy.dat
+
+      - name: توليد ملف ISO النهائي
+        run: |
+          # التأكد من وجود مجلد الوجهة للنواة
+          mkdir -p iso_root/boot
+          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -comp zstd -Xcompression-level 3
+          cp rootfs_clean/boot/vmlinuz-lts iso_root/boot/vmlinuz
+
+          xorriso -as mkisofs \
+            -volid "FUSTUQ_3" \
+            -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot -isohybrid-gpt-basdat \
             -output Fustuq-3.iso iso_root
 
-      - name: Upload artifact
+      - name: رفع ISO
         uses: actions/upload-artifact@v4
         with:
-          name: فستق-3-ISO
+          name: Fustuq-3-Final
           path: Fustuq-3.iso
