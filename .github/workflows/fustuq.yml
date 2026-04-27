@@ -136,7 +136,6 @@ jobs:
 
       - name: بناء Initramfs المحسنة
         run: |
-          # إنشاء كافة المجلدات المطلوبة بما فيها iso_root/boot
           mkdir -p initramfs/{bin,lib/modules,proc,sys,dev,media,newroot,persistence} iso_root/boot
           cp "$(which busybox)" initramfs/bin/
           cd initramfs
@@ -147,7 +146,6 @@ jobs:
           KVER=$(ls ../rootfs_clean/lib/modules/ | sort -V | tail -1)
           echo "النواة: $KVER"
 
-          # استخراج وفك ضغط الموديلات
           for mod in squashfs loop overlay usbhid hid_generic evdev psmouse; do
             src=$(find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" | head -1)
             [ -z "$src" ] && continue
@@ -185,7 +183,6 @@ jobs:
           [ -z "$SQUASH" ] && exec /bin/sh
           mount -t squashfs -o ro "$SQUASH" /newroot
 
-          # دعم persistence (قسم باسم persistence)
           P_DEV=$(blkid -L persistence 2>/dev/null)
           if [ -n "$P_DEV" ]; then
             mount "$P_DEV" /persistence && mkdir -p /persistence/u /persistence/w
@@ -214,12 +211,13 @@ jobs:
           }
           GRUB
 
-          # إقلاع BIOS
-          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
-            biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos
+          # BIOS (grub-mkstandalone - لا مشكلة مع cdrom.mod)
+          grub-mkstandalone --format=i386-pc --output=/tmp/core.img \
+            --install-modules="biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos" \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
-          # إقلاع UEFI مع صورة FAT
+          # UEFI مع صورة FAT
           grub-mkstandalone -O x86_64-efi -o iso_root/EFI/BOOT/BOOTX64.EFI \
             --install-modules="iso9660 linux normal configfile part_gpt part_msdos fat" \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
@@ -230,7 +228,7 @@ jobs:
           mcopy -i /tmp/efi.img iso_root/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/
           cp /tmp/efi.img iso_root/boot/grub/efi.img
 
-          # علامة دعم Ventoy
+          # دعم Ventoy
           touch iso_root/ventoy.dat
 
       - name: إنتاج ملف ISO النهائي
