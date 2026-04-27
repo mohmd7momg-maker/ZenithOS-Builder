@@ -211,9 +211,9 @@ jobs:
           }
           GRUB
 
-          # BIOS (grub-mkstandalone - لا مشكلة مع cdrom.mod)
+          # BIOS (بدون cdrom.mod - غير موجود في الإصدارات الحديثة من grub-pc-bin)
           grub-mkstandalone --format=i386-pc --output=/tmp/core.img \
-            --install-modules="biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos" \
+            --install-modules="biosdisk iso9660 linux normal configfile part_gpt part_msdos" \
             "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
           cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
 
