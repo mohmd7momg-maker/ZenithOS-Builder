@@ -1,7 +1,144 @@
-      - name: Build Initramfs
+name: فستق 3 (Final Production)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تثبيت أدوات البناء
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
+            grub-efi-ia32-bin grub-common mtools wget cpio util-linux \
+            busybox-static ca-certificates dosfstools rsync xz-utils zstd
+
+      - name: تجهيز نظام الملفات الأساسي
+        run: |
+          wget -q -O rootfs.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz
+          mkdir -p rootfs
+          sudo tar xzf rootfs.tar.gz -C rootfs
+
+      - name: بناء النظام داخل chroot
+        run: |
+          sudo tee rootfs/build.sh > /dev/null <<'BUILDSCRIPT'
+          #!/bin/sh -ex
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > /etc/apk/repositories
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> /etc/apk/repositories
+          apk update
+
+          # حزم النظام (خفيفة – linux-firmware-none)
+          apk add --no-cache \
+            linux-lts linux-firmware-none alpine-base openrc bash doas \
+            dbus elogind polkit-gnome seatd util-linux zstd \
+            labwc waybar foot wofi swaybg swaylock \
+            thunar thunar-volman gvfs gvfs-archive \
+            firefox-esr mesa-dri-gallium intel-media-driver \
+            font-noto ttf-dejavu font-awesome adwaita-icon-theme papirus-icon-theme \
+            haveged pipewire pipewire-pulse wireplumber pavucontrol \
+            imv mako wl-clipboard clipman grim slurp \
+            zathura zathura-pdf-mupdf wlsunset \
+            nano htop pciutils usbutils ntfs-3g dosfstools \
+            tzdata connman jq
+
+          # تفعيل الخدمات الأساسية
+          for s in dbus elogind connman seatd haveged local; do
+            rc-update add $s default
+          done
+
+          # zram ديناميكي
+          cat > /etc/init.d/fustuq-zram <<'ZRAMEOF'
+          #!/sbin/openrc-run
+          description="Fustuq dynamic zram swap"
+          depend() { need sysfs; before swap; }
+          start() {
+              modprobe zram num_devices=1 2>/dev/null || true
+              echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || \
+              echo lzo > /sys/block/zram0/comp_algorithm 2>/dev/null
+              MEM_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+              SIZE_MB=$((MEM_KB / 2 / 1024))
+              [ "$SIZE_MB" -gt 2048 ] && SIZE_MB=2048
+              echo "${SIZE_MB}M" > /sys/block/zram0/disksize
+              mkswap /dev/zram0 >/dev/null
+              swapon -p 100 /dev/zram0
+              eend $?
+          }
+          ZRAMEOF
+          chmod +x /etc/init.d/fustuq-zram
+          rc-update add fustuq-zram boot
+
+          # إعداد المستخدم admin (مع المجموعات الصحيحة فقط)
+          adduser -D admin
+          for grp in wheel video input audio seat; do
+            addgroup admin $grp
+          done
+          passwd -d admin
+          echo "permit persist :wheel" > /etc/doas.conf
+          echo 'agetty_options="--autologin admin --noclear"' > /etc/conf.d/agetty.tty1
+
+          # تشغيل واجهة Labwc بعد التأكد من جاهزية seatd
+          cat > /home/admin/.profile <<'PROFILEEOF'
+          while [ ! -e /run/seatd.sock ]; do sleep 0.5; done
+          exec dbus-run-session labwc
+          PROFILEEOF
+
+          # إعدادات سطح المكتب
+          mkdir -p /home/admin/.config/labwc
+          cat > /home/admin/.config/labwc/autostart <<'AS'
+          #!/bin/sh
+          /usr/libexec/polkit-gnome-authentication-agent-1 &
+          pipewire & pipewire-pulse & wireplumber &
+          sleep 1 && waybar & mako &
+          swaybg -c '#1e1e2e' -m solid &
+          AS
+          chmod +x /home/admin/.config/labwc/autostart
+
+          # تغيير ملكية جميع ملفات المستخدم
+          chown -R admin:admin /home/admin
+
+          # تنظيف نهائي
+          rm -rf /var/cache/apk/* /usr/share/man
+          BUILDSCRIPT
+
+          sudo chmod +x rootfs/build.sh
+          for d in proc sys dev run; do sudo mount --bind /$d rootfs/$d; done
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+          sudo chroot rootfs /build.sh
+          sudo rm rootfs/etc/resolv.conf
+          for d in run dev sys proc; do sudo umount -lf rootfs/$d; done
+
+      - name: تنظيف RootFS النهائي
+        run: |
+          sudo mkdir -p rootfs_clean
+          sudo rsync -a \
+            --exclude='/proc/*' --exclude='/sys/*' --exclude='/dev/*' \
+            --exclude='/run/*' --exclude='/tmp/*' --exclude='/mnt/*' --exclude='/media/*' \
+            rootfs/ rootfs_clean/
+
+          # سكربت تركيب NTFS تلقائي (للقراءة فقط)
+          sudo mkdir -p rootfs_clean/etc/local.d
+          sudo tee rootfs_clean/etc/local.d/ntfs.start > /dev/null <<'NTFS'
+          #!/bin/sh
+          sleep 5
+          lsblk -pno NAME,FSTYPE | awk '$2=="ntfs"{print $1}' | while read dev; do
+            mnt="/media/win_$(basename $dev)"
+            mkdir -p "$mnt"
+            mount -t ntfs-3g -o ro,force,nls=utf8 "$dev" "$mnt" 2>/dev/null
+          done
+          NTFS
+          sudo chmod +x rootfs_clean/etc/local.d/ntfs.start
+
+      - name: بناء Initramfs المحسنة
+        run: |
+          # إنشاء كافة المجلدات المطلوبة بما فيها iso_root/boot
           mkdir -p initramfs/{bin,lib/modules,proc,sys,dev,media,newroot,persistence} iso_root/boot
-          cp $(which busybox) initramfs/bin/
+          cp "$(which busybox)" initramfs/bin/
           cd initramfs
           for c in sh mount cat ls grep umount switch_root mkdir sleep insmod blkid gunzip xz zstd mdev; do
             ln -sf busybox bin/$c 2>/dev/null
@@ -10,6 +147,7 @@
           KVER=$(ls ../rootfs_clean/lib/modules/ | sort -V | tail -1)
           echo "النواة: $KVER"
 
+          # استخراج وفك ضغط الموديلات
           for mod in squashfs loop overlay usbhid hid_generic evdev psmouse; do
             src=$(find ../rootfs_clean/lib/modules/$KVER -name "${mod}.ko*" | head -1)
             [ -z "$src" ] && continue
@@ -47,6 +185,7 @@
           [ -z "$SQUASH" ] && exec /bin/sh
           mount -t squashfs -o ro "$SQUASH" /newroot
 
+          # دعم persistence (قسم باسم persistence)
           P_DEV=$(blkid -L persistence 2>/dev/null)
           if [ -n "$P_DEV" ]; then
             mount "$P_DEV" /persistence && mkdir -p /persistence/u /persistence/w
@@ -58,3 +197,56 @@
           chmod +x init
           find . | cpio -o -H newc | gzip > ../iso_root/boot/initramfs
           cd ..
+
+      - name: بناء ISO (BIOS و UEFI) مع دعم Ventoy
+        run: |
+          mkdir -p iso_root/boot/grub iso_root/EFI/BOOT
+
+          cat > iso_root/boot/grub/grub.cfg <<'GRUB'
+          set timeout=3
+          menuentry "Fustuq 3 (Standard)" {
+            linux /boot/vmlinuz quiet loglevel=3 mitigations=off
+            initrd /boot/initramfs
+          }
+          menuentry "Fustuq 3 (Safe Mode / nomodeset)" {
+            linux /boot/vmlinuz quiet nomodeset mitigations=off
+            initrd /boot/initramfs
+          }
+          GRUB
+
+          # إقلاع BIOS
+          grub-mkimage -O i386-pc -o /tmp/core.img -p /boot/grub \
+            biosdisk cdrom iso9660 linux normal configfile part_gpt part_msdos
+          cat /usr/lib/grub/i386-pc/cdboot.img /tmp/core.img > iso_root/boot/grub/eltorito.img
+
+          # إقلاع UEFI مع صورة FAT
+          grub-mkstandalone -O x86_64-efi -o iso_root/EFI/BOOT/BOOTX64.EFI \
+            --install-modules="iso9660 linux normal configfile part_gpt part_msdos fat" \
+            "boot/grub/grub.cfg=iso_root/boot/grub/grub.cfg"
+
+          truncate -s 16M /tmp/efi.img
+          mkfs.vfat -n "EFI_BOOT" /tmp/efi.img
+          mmd -i /tmp/efi.img ::/EFI ::/EFI/BOOT
+          mcopy -i /tmp/efi.img iso_root/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/
+          cp /tmp/efi.img iso_root/boot/grub/efi.img
+
+          # علامة دعم Ventoy
+          touch iso_root/ventoy.dat
+
+      - name: إنتاج ملف ISO النهائي
+        run: |
+          mkdir -p iso_root/boot
+          sudo mksquashfs rootfs_clean iso_root/fustuq.squashfs -comp zstd -Xcompression-level 3
+          cp rootfs_clean/boot/vmlinuz-lts iso_root/boot/vmlinuz
+
+          xorriso -as mkisofs \
+            -volid "FUSTUQ_3" \
+            -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot -isohybrid-gpt-basdat \
+            -output Fustuq-3.iso iso_root
+
+      - name: رفع ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fustuq-3-Final
+          path: Fustuq-3.iso
