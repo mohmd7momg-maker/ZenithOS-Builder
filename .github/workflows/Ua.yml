@@ -32,6 +32,15 @@ jobs:
           #!/usr/bin/env bash
           set -e
 
+          # ---- تثبيت الأدوات الأساسية في الحاوية ----
+          echo "[*] إعداد الحاوية وتثبيت الأدوات..."
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring
+          reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
+          pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35972
+          pacman-key --lsign-key F3B607488DB35972
+
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
 
