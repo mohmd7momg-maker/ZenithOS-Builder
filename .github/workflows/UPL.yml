@@ -265,7 +265,7 @@ jobs:
           NoDisplay=false
           EOF
 
-          # حفظ pacman.conf للنظام المثبت (مع SigLevel = Optional بدلاً من Never)
+          # حفظ pacman.conf للنظام المثبت (مع SigLevel = Required DatabaseOptional)
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
           echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
@@ -277,6 +277,10 @@ jobs:
           else
               echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
           fi
+
+          # 🔑 تنظيف قواعد البيانات التالفة من الكاش (إصلاح الخطأ)
+          echo "تنظيف قواعد البيانات المؤقتة..."
+          rm -f /workspace/pacman-cache/sync/*.db
 
           # بناء ISO
           echo "بدء mkarchiso..."
