@@ -31,13 +31,11 @@ jobs:
           cat > ${{ github.workspace }}/build.sh <<'BUILD_SCRIPT'
           #!/usr/bin/env bash
           set -e
-          echo "[*] بدأ تنفيذ build.sh"
+          echo "بدء build.sh ..."
 
-          echo "[*] إعداد الحاوية وتثبيت الأدوات..."
+          # ---- إعداد الحاوية ----
           pacman-key --init
           pacman-key --populate archlinux
-
-          # استيراد مفتاح CachyOS الصحيح
           pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
           pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
 
@@ -51,10 +49,9 @@ jobs:
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
           pacman-key --populate cachyos
 
+          # ---- تجهيز بيئة البناء ----
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
-
-          echo "[*] تجهيز بيئة البناء..."
           mkdir -p "$WORKDIR"
           rm -rf "$PROFILE_DIR"
           mkdir -p "$PROFILE_DIR"
@@ -63,6 +60,7 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
+          # ---- pacman.conf للبناء (يدعم x86_64_v3) ----
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -85,13 +83,14 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           EOF
 
+          # ---- مرايا CachyOS موثوقة ----
           mkdir -p airootfs/etc/pacman.d
-          echo "[*] إعداد مرايا CachyOS..."
           for repo in cachyos-v3 cachyos; do
             echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" > "/etc/pacman.d/${repo}-mirrorlist"
             cp "/etc/pacman.d/${repo}-mirrorlist" "airootfs/etc/pacman.d/${repo}-mirrorlist"
           done
 
+          # ---- إضافة الحزم (قائمة مختصرة ومضمونة) ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
@@ -184,18 +183,20 @@ jobs:
           gimp
           EOF
 
+          # ---- إعداد المستخدم arch ----
           mkdir -p airootfs/home/arch
           chown -R 1000:1000 airootfs/home/arch
           chmod 750 airootfs/home/arch
-
           mkdir -p airootfs/etc/sudoers.d
           echo 'arch ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/arch
           chmod 440 airootfs/etc/sudoers.d/arch
 
+          # ---- Nvidia KMS ----
           if [ -f airootfs/etc/mkinitcpio.conf ]; then
               sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' airootfs/etc/mkinitcpio.conf
           fi
 
+          # ---- sysctl ----
           mkdir -p airootfs/etc/sysctl.d
           cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'EOF'
           vm.swappiness=80
@@ -218,6 +219,7 @@ jobs:
           net.ipv4.conf.default.rp_filter=1
           EOF
 
+          # ---- zram ----
           mkdir -p airootfs/etc/systemd/zram-generator.conf.d
           cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'EOF'
           [zram0]
@@ -226,24 +228,23 @@ jobs:
           swap-priority = 100
           EOF
 
+          # ---- SDDM ----
           mkdir -p airootfs/etc/sddm.conf.d
           cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
           [Autologin]
           User=arch
           Session=plasma
-
           [General]
           DisplayServer=wayland
-
           [Theme]
           Current=breeze
           EOF
 
+          # ---- تفعيل الخدمات ----
           enable_service() {
               mkdir -p "airootfs/etc/systemd/system/$2.wants"
               ln -sf "/usr/lib/systemd/system/$1" "airootfs/etc/systemd/system/$2.wants/$1"
           }
-
           enable_service sddm.service graphical.target
           enable_service NetworkManager.service multi-user.target
           enable_service bluetooth.service multi-user.target
@@ -254,113 +255,11 @@ jobs:
           enable_service cups.service multi-user.target
           enable_service sshd.service multi-user.target
 
-          cat > airootfs/etc/systemd/system/reflector-update.service <<'RFEOF'
-          [Unit]
-          Description=Update pacman mirrorlist with reflector
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/bin/reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
-          StandardOutput=journal
-          StandardError=journal
-          RFEOF
-
-          cat > airootfs/etc/systemd/system/reflector-update.timer <<'RFETIMER'
-          [Unit]
-          Description=Weekly reflector update
-
-          [Timer]
-          OnBootSec=2min
-          OnUnitActiveSec=1w
-          AccuracySec=1h
-          Persistent=true
-
-          [Install]
-          WantedBy=timers.target
-          RFETIMER
-
-          enable_service reflector-update.timer timers.target
-
-          cat > airootfs/etc/motd <<'MOTD'
-          ┌─────────────────────────────────────────────────────────────┐
-          │                  UPL (Ultra Performance Linux)              │
-          │                    Arch-based Live ISO                      │
-          │                                                             │
-          │  Calamares installer will start automatically              │
-          │  Or run: sudo cachyos-calamares                            │
-          │  For system rescue: cachy-chroot                           │
-          └─────────────────────────────────────────────────────────────┘
-          MOTD
-
-          mkdir -p airootfs/etc/calamares/modules
-          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'EOF'
-          script: "/usr/local/bin/upl-postinstall.sh"
-          timeout: 600
-          EOF
-
-          cat > airootfs/etc/calamares/modules/mount.conf <<'EOF'
-          btrfsSubvolumes:
-              - mountPoint: /
-                subvolume: /@
-              - mountPoint: /home
-                subvolume: /@home
-              - mountPoint: /var/cache
-                subvolume: /@cache
-              - mountPoint: /var/log
-                subvolume: /@log
-          efiMountPoint: /boot/efi
-          EOF
-
-          cat > airootfs/etc/calamares/modules/partition.conf <<'EOF'
-          defaultFileSystemType: "btrfs"
-          availableFileSystemTypes: ["ext4","btrfs","xfs","f2fs","swap"]
-          enableLuksAutomatedPartitioning: true
-          allowManualPartitioning: true
-          initialPartitioningChoice: "erase"
-          efi:
-              mountPoint: "/boot/efi"
-              recommendedSize: 512MiB
-              minimumSize: 256MiB
-          EOF
-
-          cat > airootfs/etc/calamares/settings.conf <<'EOF'
-          modules-search: [ local, /usr/lib/calamares/modules ]
-          instances:
-          - show: welcome
-          - show: locale
-          - show: keyboard
-          - show: partition
-          - show: users
-          - show: summary
-          - module: shellprocess
-            config: shellprocess.conf
-          - show: finished
-          sequence:
-          - show:
-            - welcome
-            - locale
-            - keyboard
-            - partition
-            - users
-            - summary
-          - exec:
-            - shellprocess
-          - show:
-            - finished
-          branding: default
-          prompt-install: true
-          dont-chroot: false
-          disable-cancel: false
-          quit-at-end: false
-          EOF
-
+          # ---- Calamares autostart + fallback ----
           mkdir -p airootfs/etc/xdg/autostart
           cat > airootfs/etc/xdg/autostart/calamares.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
-          Version=1.0
           Name=Install System
           Exec=cachyos-calamares
           Icon=system-software-install
@@ -368,8 +267,6 @@ jobs:
           X-GNOME-Autostart-enabled=true
           X-KDE-autostart-after=panel
           NoDisplay=false
-          StartupNotify=true
-          Terminal=false
           EOF
 
           cat > airootfs/usr/local/bin/start-calamares.sh <<'STARTCAL'
@@ -380,124 +277,40 @@ jobs:
           STARTCAL
           chmod +x airootfs/usr/local/bin/start-calamares.sh
 
-          cat > airootfs/etc/systemd/system/calamares-launcher.service <<'CLSVC'
-          [Unit]
-          Description=Calamares Installer Fallback Launcher
-          After=sddm.service
-          ConditionFileNotEmpty=/usr/bin/cachyos-calamares
-
-          [Service]
-          Type=simple
-          User=arch
-          ExecStart=/usr/local/bin/start-calamares.sh
-          Restart=on-failure
-          RestartSec=5
-
-          [Install]
-          WantedBy=graphical.target
-          CLSVC
-          enable_service calamares-launcher.service graphical.target
-
-          cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POST'
-          #!/bin/bash
-          set -e
-
-          cp /usr/local/share/upl/pacman.conf /etc/pacman.conf
-
-          pacman-key --init 2>/dev/null || true
-          pacman-key --populate cachyos archlinux 2>/dev/null || true
-
-          for service in apparmor ufw power-profiles-daemon; do
-              systemctl enable "$service" 2>/dev/null || true
-          done
-
-          if command -v aa-enforce &>/dev/null; then
-              find /etc/apparmor.d/ -maxdepth 1 -type f ! -name '*.dpkg-*' -exec aa-enforce {} + 2>/dev/null || true
-          fi
-
-          ufw --force reset 2>/dev/null || true
-          ufw default deny incoming
-          ufw default allow outgoing
-          ufw limit 22/tcp
-          ufw --force enable
-
-          if command -v flatpak &>/dev/null; then
-              flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
-          fi
-
-          echo "[*] إعداد GRUB..."
-          if [ -d /sys/firmware/efi ]; then
-              if mountpoint -q /boot/efi; then
-                  grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=UPL-OS --removable 2>/dev/null || true
-              fi
-          else
-              ROOT_DEV=$(findmnt -n -o SOURCE / | head -1)
-              DISK=$(lsblk -n -o PKNAME "$ROOT_DEV" 2>/dev/null | head -1)
-              if [ -n "$DISK" ]; then
-                  grub-install --target=i386-pc "/dev/$DISK" 2>/dev/null || true
-              fi
-          fi
-
-          grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-
-          if [ -f /etc/default/grub ]; then
-              grep -q "GRUB_DISABLE_OS_PROBER" /etc/default/grub || echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
-              grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-          fi
-
-          rm -f /etc/sudoers.d/arch
-
-          if command -v timeshift &>/dev/null; then
-              FS_TYPE=$(stat -c %T / 2>/dev/null || echo "unknown")
-              if [ "$FS_TYPE" = "btrfs" ]; then
-                  timeshift --create --comments "لقطة أولية" --tags D 2>/dev/null || true
-              fi
-          fi
-
-          echo "[✔] اكتمل الإعداد اللاحق للتثبيت"
-          POST
-          chmod +x airootfs/usr/local/bin/upl-postinstall.sh
-
+          # ---- حفظ pacman.conf للنظام المثبت ----
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^CacheDir" pacman.conf > airootfs/usr/local/share/upl/pacman.conf
 
+          # ---- ضغط squashfs ----
           if grep -q "^squashfs_options=" profiledef.sh; then
               sed -i "s|^squashfs_options=.*|squashfs_options=\"-comp zstd -Xcompression-level 1\"|" profiledef.sh
           else
               echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
           fi
 
-          echo "[*] بدء تنفيذ mkarchiso (سيستغرق وقتاً)..."
-          mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR" || {
-              echo "[✗] فشل mkarchiso"
-              exit 1
-          }
+          # ---- بناء ISO (الخطوة الحاسمة) ----
+          echo "بدء mkarchiso..."
+          mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
+          echo "انتهى mkarchiso"
 
           rm -rf "$WORKDIR/archiso-tmp"
           [ $EUID -eq 0 ] && chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
 
           ISO_FILE=$(ls -t "$WORKDIR/out"/*.iso 2>/dev/null | head -1)
           if [ -n "$ISO_FILE" ]; then
-              SIZE=$(du -h "$ISO_FILE" | cut -f1)
-              echo "╔════════════════════════════════════════════════════════╗"
-              echo "║             ✅ تم إنشاء ISO بنجاح!                    ║"
-              echo "║ المسار: $ISO_FILE"
-              echo "║ الحجم:  $SIZE"
-              echo "╚════════════════════════════════════════════════════════╝"
+              echo "✅ تم إنشاء ISO: $ISO_FILE"
           else
-              echo "[✗] لم يتم العثور على ملف ISO"
+              echo "❌ فشل: لم يتم العثور على ملف ISO"
               exit 1
           fi
           BUILD_SCRIPT
 
-          # تأكيد أن build.sh موجود وغير فارغ
-          if [ ! -s ${{ github.workspace }}/build.sh ]; then
-            echo "خطأ: build.sh فارغ أو غير موجود"
-            exit 1
-          fi
+      - name: Ensure build script is valid
+        run: |
+          test -s ${{ github.workspace }}/build.sh || { echo "build.sh missing!"; exit 1; }
           chmod +x ${{ github.workspace }}/build.sh
 
-      - name: Run build script inside Arch container
+      - name: Run build inside container
         run: |
           mkdir -p ${{ github.workspace }}/pacman-cache
           docker run --rm --privileged \
@@ -505,19 +318,14 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             archlinux:latest \
-            bash -c "
-              echo '[حاوية] بدأ تشغيل build.sh...'
-              bash -x /workspace/build.sh
-              echo '[حاوية] انتهى build.sh بنجاح'
-            "
+            /workspace/build.sh
 
-      - name: Check output
+      - name: Verify ISO creation
         run: |
-          echo "محتويات مجلد الإخراج:"
-          ls -R ${{ github.workspace }}/upl-iso-build/out/ || echo "مجلد الإخراج غير موجود!"
+          ls -la ${{ github.workspace }}/upl-iso-build/out/
+          test -f ${{ github.workspace }}/upl-iso-build/out/*.iso || { echo "ISO not found!"; exit 1; }
 
       - name: Generate Checksums
-        if: success()
         run: |
           cd ${{ github.workspace }}/upl-iso-build/out
           sha256sum *.iso > checksums.txt
