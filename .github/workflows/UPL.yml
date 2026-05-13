@@ -32,27 +32,23 @@ jobs:
           #!/usr/bin/env bash
           set -e
 
-          # ---- تثبيت الأدوات الأساسية (مع المفتاح الصحيح) ----
           echo "[*] إعداد الحاوية وتثبيت الأدوات..."
           pacman-key --init
           pacman-key --populate archlinux
 
-          # استيراد مفتاح CachyOS الصحيح (882DCFE48E2051D48E2562ABF3B607488DB35A47)
+          # استيراد مفتاح CachyOS الصحيح
           pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
           pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
 
-          # إنشاء ملف مرايا بمرآة واحدة موثوقة لتجنب مشاكل DNS
+          # إنشاء ملف مرايا بمرآة واحدة موثوقة
           mkdir -p /etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
 
-          # إضافة مستودع CachyOS مؤقتاً
           echo "[cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
 
           pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
-
-          # تحديث الثقة بمفاتيح CachyOS بعد تثبيت cachyos-keyring
           pacman-key --populate cachyos
 
           WORKDIR="/workspace/upl-iso-build"
@@ -65,10 +61,9 @@ jobs:
           cp -r /usr/share/archiso/configs/releng/* "$PROFILE_DIR"
           cd "$PROFILE_DIR"
 
-          # إزالة النواة الافتراضية لتجنب التعارض
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # ---- pacman.conf (مع CacheDir) ----
+          # ---- pacman.conf (بدون Priority، الترتيب كافٍ) ----
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -79,11 +74,9 @@ jobs:
 
           [cachyos-v3]
           Include = /etc/pacman.d/cachyos-v3-mirrorlist
-          Priority = 90
 
           [cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist
-          Priority = 80
 
           [core]
           Include = /etc/pacman.d/mirrorlist
@@ -101,7 +94,7 @@ jobs:
           cp /etc/pacman.d/cachyos-v3-mirrorlist airootfs/etc/pacman.d/cachyos-v3-mirrorlist
           cp /etc/pacman.d/cachyos-mirrorlist airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ---- الحزم ----
+          # ---- الحزم (الإصدار المُصحَّح بالكامل) ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
@@ -138,11 +131,8 @@ jobs:
           xdg-desktop-portal
           xdg-desktop-portal-kde
           zram-generator
-          systemd-oomd
           ananicy-cpp
-          ananicy-rules
           power-profiles-daemon
-          uksmd
           apparmor
           ufw
           openssh
@@ -167,8 +157,6 @@ jobs:
           mesa
           vulkan-intel
           vulkan-radeon
-          libva-mesa-driver
-          libva-intel-driver
           intel-media-driver
           nvidia-dkms
           nvidia-utils
@@ -186,7 +174,7 @@ jobs:
           ntfs-3g
           exfatprogs
           f2fs-tools
-          calamares
+          cachyos-calamares
           noto-fonts
           noto-fonts-cjk
           ttf-dejavu
@@ -245,23 +233,6 @@ jobs:
           swap-priority = 100
           EOF
 
-          # ---- oomd ----
-          mkdir -p airootfs/etc/systemd/oomd.conf.d
-          cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'EOF'
-          [OOM]
-          DefaultMemoryPressureDurationSec=20s
-          SwapUsedLimit=90%
-          DefaultMemoryPressureLimit=60%
-          EOF
-
-          # ---- حدود الذاكرة لـ uksmd ----
-          mkdir -p airootfs/etc/systemd/system/uksmd.service.d
-          cat > airootfs/etc/systemd/system/uksmd.service.d/limits.conf <<'EOF'
-          [Service]
-          MemoryMax=512M
-          MemoryHigh=384M
-          EOF
-
           # ---- SDDM (Wayland) ----
           mkdir -p airootfs/etc/sddm.conf.d
           cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
@@ -286,10 +257,8 @@ jobs:
           enable_service bluetooth.service multi-user.target
           enable_service ufw.service multi-user.target
           enable_service apparmor.service multi-user.target
-          enable_service systemd-oomd.service multi-user.target
           enable_service ananicy-cpp.service multi-user.target
           enable_service power-profiles-daemon.service multi-user.target
-          enable_service uksmd.service multi-user.target
           enable_service cups.service multi-user.target
           enable_service sshd.service multi-user.target
 
@@ -330,7 +299,7 @@ jobs:
           │                    Arch-based Live ISO                      │
           │                                                             │
           │  Calamares installer will start automatically              │
-          │  Or run: sudo calamares                                    │
+          │  Or run: sudo cachyos-calamares                            │
           │  For system rescue: cachy-chroot                           │
           └─────────────────────────────────────────────────────────────┘
           MOTD
@@ -405,7 +374,7 @@ jobs:
           Type=Application
           Version=1.0
           Name=Install System
-          Exec=calamares
+          Exec=cachyos-calamares
           Icon=system-software-install
           Categories=System;
           X-GNOME-Autostart-enabled=true
@@ -418,9 +387,9 @@ jobs:
           # ---- Fallback launcher ----
           cat > airootfs/usr/local/bin/start-calamares.sh <<'STARTCAL'
           #!/bin/bash
-          pgrep -x calamares > /dev/null 2>&1 && exit 0
+          pgrep -x cachyos-calamares > /dev/null 2>&1 && exit 0
           sleep 5
-          exec calamares
+          exec cachyos-calamares
           STARTCAL
           chmod +x airootfs/usr/local/bin/start-calamares.sh
 
@@ -428,7 +397,7 @@ jobs:
           [Unit]
           Description=Calamares Installer Fallback Launcher
           After=sddm.service
-          ConditionFileNotEmpty=/usr/bin/calamares
+          ConditionFileNotEmpty=/usr/bin/cachyos-calamares
 
           [Service]
           Type=simple
@@ -452,7 +421,7 @@ jobs:
           pacman-key --init 2>/dev/null || true
           pacman-key --populate cachyos archlinux 2>/dev/null || true
 
-          for service in uksmd apparmor ufw power-profiles-daemon; do
+          for service in apparmor ufw power-profiles-daemon; do
               systemctl enable "$service" 2>/dev/null || true
           done
 
@@ -540,10 +509,7 @@ jobs:
               echo "║ 1. اكتب ISO على USB:                                   ║"
               echo "║    sudo dd if=$ISO_FILE of=/dev/sdX bs=4M status=progress"
               echo "║                                                        ║"
-              echo "║ 2. أقلع من USB وابدأ التثبيت عبر Calamares            ║"
-              echo "║                                                        ║"
-              echo "║ ⏱️  ملاحظة: الإقلاع الأول قد يستغرق دقيقة إضافية     ║"
-              echo "║ بسبب بناء DKMS modules لـ Nvidia                       ║"
+              echo "║ 2. أقلع من USB وابدأ التثبيت عبر CachyOS Calamares    ║"
               echo "╚════════════════════════════════════════════════════════╝"
               echo ""
           else
