@@ -18,7 +18,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           sudo docker system prune -af || true
 
-      - name: Cache pacman packages
+      - name: Cache pacman packages (disabled for debug)
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/pacman-cache
@@ -59,7 +59,7 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # ---- pacman.conf مع SigLevel = Never للبناء فقط ----
+          # ---- pacman.conf مع SigLevel = Never ----
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -69,10 +69,10 @@ jobs:
           CacheDir    = /workspace/pacman-cache
 
           [cachyos-v3]
-          Include = /etc/pacman.d/cachyos-v3-mirrorlist
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
 
           [cachyos]
-          Include = /etc/pacman.d/cachyos-mirrorlist
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
 
           [core]
           Include = /etc/pacman.d/mirrorlist
@@ -82,25 +82,17 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           EOF
 
-          # ---- مرايا متعددة لتجنب التلف ----
-          mkdir -p airootfs/etc/pacman.d
-          # عدة مرايا موثوقة لـ cachyos-v3
-          cat > /etc/pacman.d/cachyos-v3-mirrorlist <<'MIRRORS'
-          Server = https://mirror.cachyos.org/repo/$arch/$repo
-          Server = https://us.cachyos.org/repo/$arch/$repo
-          Server = https://de.cachyos.org/repo/$arch/$repo
-          Server = https://nl.cachyos.org/repo/$arch/$repo
-          MIRRORS
-          # عدة مرايا موثوقة لـ cachyos
-          cat > /etc/pacman.d/cachyos-mirrorlist <<'MIRRORS'
-          Server = https://mirror.cachyos.org/repo/$arch/$repo
-          Server = https://us.cachyos.org/repo/$arch/$repo
-          Server = https://de.cachyos.org/repo/$arch/$repo
-          Server = https://nl.cachyos.org/repo/$arch/$repo
-          MIRRORS
+          # ---- تنظيف كامل للكاش والمزامنة ----
+          echo "تنظيف الكاش وقواعد البيانات..."
+          rm -rf /workspace/pacman-cache
+          mkdir -p /workspace/pacman-cache
+          rm -rf /var/lib/pacman/sync/*
+          pacman -Sy --noconfirm
 
-          cp /etc/pacman.d/cachyos-v3-mirrorlist airootfs/etc/pacman.d/cachyos-v3-mirrorlist
-          cp /etc/pacman.d/cachyos-mirrorlist airootfs/etc/pacman.d/cachyos-mirrorlist
+          # ---- مرايا CachyOS لـ airootfs (مرآة واحدة مباشرة) ----
+          mkdir -p airootfs/etc/pacman.d
+          echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-v3-mirrorlist
+          echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
