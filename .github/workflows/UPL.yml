@@ -82,11 +82,25 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           EOF
 
+          # ---- مرايا متعددة لتجنب التلف ----
           mkdir -p airootfs/etc/pacman.d
-          for repo in cachyos-v3 cachyos; do
-            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" > "/etc/pacman.d/${repo}-mirrorlist"
-            cp "/etc/pacman.d/${repo}-mirrorlist" "airootfs/etc/pacman.d/${repo}-mirrorlist"
-          done
+          # عدة مرايا موثوقة لـ cachyos-v3
+          cat > /etc/pacman.d/cachyos-v3-mirrorlist <<'MIRRORS'
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
+          Server = https://us.cachyos.org/repo/$arch/$repo
+          Server = https://de.cachyos.org/repo/$arch/$repo
+          Server = https://nl.cachyos.org/repo/$arch/$repo
+          MIRRORS
+          # عدة مرايا موثوقة لـ cachyos
+          cat > /etc/pacman.d/cachyos-mirrorlist <<'MIRRORS'
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
+          Server = https://us.cachyos.org/repo/$arch/$repo
+          Server = https://de.cachyos.org/repo/$arch/$repo
+          Server = https://nl.cachyos.org/repo/$arch/$repo
+          MIRRORS
+
+          cp /etc/pacman.d/cachyos-v3-mirrorlist airootfs/etc/pacman.d/cachyos-v3-mirrorlist
+          cp /etc/pacman.d/cachyos-mirrorlist airootfs/etc/pacman.d/cachyos-mirrorlist
 
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
@@ -277,10 +291,6 @@ jobs:
           else
               echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
           fi
-
-          # 🔑 تنظيف قواعد البيانات التالفة من الكاش (إصلاح الخطأ)
-          echo "تنظيف قواعد البيانات المؤقتة..."
-          rm -f /workspace/pacman-cache/sync/*.db
 
           # بناء ISO
           echo "بدء mkarchiso..."
