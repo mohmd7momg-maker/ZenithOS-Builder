@@ -32,10 +32,17 @@ jobs:
           #!/usr/bin/env bash
           set -e
 
-          # ---- تثبيت الأدوات الأساسية في الحاوية ----
+          # ---- تثبيت الأدوات الأساسية (مع مستودع CachyOS) ----
           echo "[*] إعداد الحاوية وتثبيت الأدوات..."
           pacman-key --init
           pacman-key --populate archlinux
+
+          # إضافة مستودع CachyOS مؤقتًا للحصول على cachyos-keyring
+          echo "[cachyos]
+          Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
+          mkdir -p /etc/pacman.d
+          curl -fL https://mirror.cachyos.org/cachyos-mirrorlist -o /etc/pacman.d/cachyos-mirrorlist
+
           pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
           pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35972
