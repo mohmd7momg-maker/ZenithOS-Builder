@@ -45,9 +45,9 @@ jobs:
           echo "[cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
 
-          pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring
+          pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring archlinux-keyring
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
-          pacman-key --populate cachyos
+          pacman-key --populate cachyos archlinux
 
           # ---- تجهيز بيئة البناء ----
           WORKDIR="/workspace/upl-iso-build"
@@ -90,7 +90,7 @@ jobs:
             cp "/etc/pacman.d/${repo}-mirrorlist" "airootfs/etc/pacman.d/${repo}-mirrorlist"
           done
 
-          # ---- إضافة الحزم (قائمة مختصرة ومضمونة) ----
+          # ---- الحزم ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
@@ -183,7 +183,7 @@ jobs:
           gimp
           EOF
 
-          # ---- إعداد المستخدم arch ----
+          # ---- المستخدم arch ----
           mkdir -p airootfs/home/arch
           chown -R 1000:1000 airootfs/home/arch
           chmod 750 airootfs/home/arch
@@ -240,7 +240,6 @@ jobs:
           Current=breeze
           EOF
 
-          # ---- تفعيل الخدمات ----
           enable_service() {
               mkdir -p "airootfs/etc/systemd/system/$2.wants"
               ln -sf "/usr/lib/systemd/system/$1" "airootfs/etc/systemd/system/$2.wants/$1"
@@ -255,7 +254,7 @@ jobs:
           enable_service cups.service multi-user.target
           enable_service sshd.service multi-user.target
 
-          # ---- Calamares autostart + fallback ----
+          # ---- Calamares autostart ----
           mkdir -p airootfs/etc/xdg/autostart
           cat > airootfs/etc/xdg/autostart/calamares.desktop <<'EOF'
           [Desktop Entry]
@@ -269,14 +268,6 @@ jobs:
           NoDisplay=false
           EOF
 
-          cat > airootfs/usr/local/bin/start-calamares.sh <<'STARTCAL'
-          #!/bin/bash
-          pgrep -x cachyos-calamares > /dev/null 2>&1 && exit 0
-          sleep 5
-          exec cachyos-calamares
-          STARTCAL
-          chmod +x airootfs/usr/local/bin/start-calamares.sh
-
           # ---- حفظ pacman.conf للنظام المثبت ----
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^CacheDir" pacman.conf > airootfs/usr/local/share/upl/pacman.conf
@@ -288,7 +279,14 @@ jobs:
               echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
           fi
 
-          # ---- بناء ISO (الخطوة الحاسمة) ----
+          # ==============================
+          # 🔑 تجديد المفاتيح (منع GPGME)
+          # ==============================
+          pacman-key --init
+          pacman-key --populate archlinux cachyos
+          pacman-key --refresh-keys || true
+
+          # ---- بناء ISO ----
           echo "بدء mkarchiso..."
           mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
           echo "انتهى mkarchiso"
