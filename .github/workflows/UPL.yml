@@ -32,21 +32,28 @@ jobs:
           #!/usr/bin/env bash
           set -e
 
-          # ---- تثبيت الأدوات الأساسية (مع مستودع CachyOS) ----
+          # ---- تثبيت الأدوات الأساسية (مع المفتاح الصحيح) ----
           echo "[*] إعداد الحاوية وتثبيت الأدوات..."
           pacman-key --init
           pacman-key --populate archlinux
 
-          # إضافة مستودع CachyOS مؤقتًا للحصول على cachyos-keyring
+          # استيراد مفتاح CachyOS الصحيح (882DCFE48E2051D48E2562ABF3B607488DB35A47)
+          pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
+          pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
+
+          # إنشاء ملف مرايا بمرآة واحدة موثوقة لتجنب مشاكل DNS
+          mkdir -p /etc/pacman.d
+          echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
+
+          # إضافة مستودع CachyOS مؤقتاً
           echo "[cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
-          mkdir -p /etc/pacman.d
-          curl -fL https://mirror.cachyos.org/cachyos-mirrorlist -o /etc/pacman.d/cachyos-mirrorlist
 
           pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
-          pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35972
-          pacman-key --lsign-key F3B607488DB35972
+
+          # تحديث الثقة بمفاتيح CachyOS بعد تثبيت cachyos-keyring
+          pacman-key --populate cachyos
 
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
@@ -94,7 +101,7 @@ jobs:
           cp /etc/pacman.d/cachyos-v3-mirrorlist airootfs/etc/pacman.d/cachyos-v3-mirrorlist
           cp /etc/pacman.d/cachyos-mirrorlist airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ---- الحزم (بما فيها cachy-chroot) ----
+          # ---- الحزم ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
