@@ -58,7 +58,7 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # ---- pacman.conf بدون cachyos-v3 ----
+          # pacman.conf (SigLevel=Never للبناء فقط)
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -78,7 +78,6 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           EOF
 
-          # ---- إعداد المرايا ----
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
@@ -174,18 +173,33 @@ jobs:
           gimp
           EOF
 
-          # ---- المستخدم arch ----
-          mkdir -p airootfs/home/arch
+          # ---- إنشاء المستخدم arch (يدوي + تلقائي للتيقن) ----
+          mkdir -p airootfs/etc/skel airootfs/home/arch
+          echo 'arch:x:1000:1000:arch:/home/arch:/bin/bash' >> airootfs/etc/passwd
+          echo 'arch:x:1000:' >> airootfs/etc/group
+          echo 'arch:!*:19700::::::' >> airootfs/etc/shadow
+          echo 'arch:!::' >> airootfs/etc/gshadow
           chown -R 1000:1000 airootfs/home/arch
           chmod 750 airootfs/home/arch
+          cat > airootfs/etc/skel/.bashrc <<'BASHRC'
+          [[ $- != *i* ]] && return
+          PS1='[\u@\h \W]\$ '
+          alias ls='ls --color=auto'
+          alias ll='ls -lah'
+          export EDITOR=nano
+          BASHRC
+          cat > airootfs/etc/skel/.bash_profile <<'BASHPROF'
+          [[ -f ~/.bashrc ]] && . ~/.bashrc
+          BASHPROF
           mkdir -p airootfs/etc/sudoers.d
           echo 'arch ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/arch
           chmod 440 airootfs/etc/sudoers.d/arch
 
-          # ---- Nvidia KMS ----
-          if [ -f airootfs/etc/mkinitcpio.conf ]; then
-              sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' airootfs/etc/mkinitcpio.conf
-          fi
+          # ---- Nvidia KMS (طريقة .conf.d الآمنة) ----
+          mkdir -p airootfs/etc/mkinitcpio.conf.d
+          cat > airootfs/etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
+          MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+          NVIDIACONF
 
           # ---- sysctl ----
           mkdir -p airootfs/etc/sysctl.d
@@ -219,6 +233,15 @@ jobs:
           swap-priority = 100
           EOF
 
+          # ---- systemd-oomd ----
+          mkdir -p airootfs/etc/systemd/oomd.conf.d
+          cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'EOF'
+          [OOM]
+          DefaultMemoryPressureDurationSec=20s
+          SwapUsedLimit=90%
+          DefaultMemoryPressureLimit=60%
+          EOF
+
           # ---- SDDM ----
           mkdir -p airootfs/etc/sddm.conf.d
           cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
@@ -242,6 +265,8 @@ jobs:
           enable_service apparmor.service multi-user.target
           enable_service ananicy-cpp.service multi-user.target
           enable_service power-profiles-daemon.service multi-user.target
+          enable_service systemd-oomd.service multi-user.target
+          enable_service uksmd.service multi-user.target
           enable_service cups.service multi-user.target
           enable_service sshd.service multi-user.target
 
@@ -259,7 +284,7 @@ jobs:
           NoDisplay=false
           EOF
 
-          # ---- حفظ pacman.conf للنظام المثبت ----
+          # ---- حفظ pacman.conf للنظام المثبت (مع SigLevel = Required) ----
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
           echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
@@ -311,6 +336,7 @@ jobs:
 
       - name: Generate Checksums
         run: |
+          sudo chown -R $(whoami) ${{ github.workspace }}/upl-iso-build/out
           cd ${{ github.workspace }}/upl-iso-build/out
           sha256sum *.iso > checksums.txt
 
