@@ -33,7 +33,7 @@ jobs:
           set -e
           echo "بدء build.sh ..."
 
-          # ---- إعداد الحاوية ----
+          # إعداد الحاوية
           pacman-key --init
           pacman-key --populate archlinux
           pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
@@ -49,7 +49,6 @@ jobs:
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
           pacman-key --populate cachyos archlinux
 
-          # ---- تجهيز بيئة البناء ----
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
           mkdir -p "$WORKDIR"
@@ -60,12 +59,12 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # ---- pacman.conf للبناء (يدعم x86_64_v3) ----
+          # ---- pacman.conf مع SigLevel = Never للبناء فقط ----
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
           Architecture = x86_64 x86_64_v3
-          SigLevel    = Required DatabaseOptional
+          SigLevel    = Never
           LocalFileSigLevel = Optional
           CacheDir    = /workspace/pacman-cache
 
@@ -83,14 +82,12 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           EOF
 
-          # ---- مرايا CachyOS موثوقة ----
           mkdir -p airootfs/etc/pacman.d
           for repo in cachyos-v3 cachyos; do
             echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" > "/etc/pacman.d/${repo}-mirrorlist"
             cp "/etc/pacman.d/${repo}-mirrorlist" "airootfs/etc/pacman.d/${repo}-mirrorlist"
           done
 
-          # ---- الحزم ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
@@ -183,7 +180,7 @@ jobs:
           gimp
           EOF
 
-          # ---- المستخدم arch ----
+          # المستخدم arch
           mkdir -p airootfs/home/arch
           chown -R 1000:1000 airootfs/home/arch
           chmod 750 airootfs/home/arch
@@ -191,12 +188,12 @@ jobs:
           echo 'arch ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/arch
           chmod 440 airootfs/etc/sudoers.d/arch
 
-          # ---- Nvidia KMS ----
+          # Nvidia KMS
           if [ -f airootfs/etc/mkinitcpio.conf ]; then
               sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' airootfs/etc/mkinitcpio.conf
           fi
 
-          # ---- sysctl ----
+          # sysctl
           mkdir -p airootfs/etc/sysctl.d
           cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'EOF'
           vm.swappiness=80
@@ -219,7 +216,7 @@ jobs:
           net.ipv4.conf.default.rp_filter=1
           EOF
 
-          # ---- zram ----
+          # zram
           mkdir -p airootfs/etc/systemd/zram-generator.conf.d
           cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'EOF'
           [zram0]
@@ -228,7 +225,7 @@ jobs:
           swap-priority = 100
           EOF
 
-          # ---- SDDM ----
+          # SDDM
           mkdir -p airootfs/etc/sddm.conf.d
           cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
           [Autologin]
@@ -254,7 +251,7 @@ jobs:
           enable_service cups.service multi-user.target
           enable_service sshd.service multi-user.target
 
-          # ---- Calamares autostart ----
+          # Calamares autostart
           mkdir -p airootfs/etc/xdg/autostart
           cat > airootfs/etc/xdg/autostart/calamares.desktop <<'EOF'
           [Desktop Entry]
@@ -268,25 +265,20 @@ jobs:
           NoDisplay=false
           EOF
 
-          # ---- حفظ pacman.conf للنظام المثبت ----
+          # حفظ pacman.conf للنظام المثبت (مع SigLevel = Optional بدلاً من Never)
           mkdir -p airootfs/usr/local/share/upl
-          grep -v "^CacheDir" pacman.conf > airootfs/usr/local/share/upl/pacman.conf
+          grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
+          echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
+          cp /tmp/pacman_clean.conf airootfs/usr/local/share/upl/pacman.conf
 
-          # ---- ضغط squashfs ----
+          # ضغط squashfs
           if grep -q "^squashfs_options=" profiledef.sh; then
               sed -i "s|^squashfs_options=.*|squashfs_options=\"-comp zstd -Xcompression-level 1\"|" profiledef.sh
           else
               echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
           fi
 
-          # ==============================
-          # 🔑 تجديد المفاتيح (منع GPGME)
-          # ==============================
-          pacman-key --init
-          pacman-key --populate archlinux cachyos
-          pacman-key --refresh-keys || true
-
-          # ---- بناء ISO ----
+          # بناء ISO
           echo "بدء mkarchiso..."
           mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
           echo "انتهى mkarchiso"
