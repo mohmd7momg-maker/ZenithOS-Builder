@@ -1,4 +1,4 @@
-name: Build UPL-OS (Ultra Performance Linux)
+name: Build UPL-OS (Light Edition)
 
 on:
   workflow_dispatch:
@@ -58,7 +58,7 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # pacman.conf (SigLevel=Never للبناء فقط)
+          # pacman.conf بدون cachyos-v3
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -81,6 +81,9 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
+          # ==============================================
+          # قائمة الحزم المخففة (بدون LibreOffice, GIMP, VLC, وغيرها)
+          # ==============================================
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
@@ -107,12 +110,10 @@ jobs:
           plasma-systemmonitor
           konsole
           dolphin
-          ark
           okular
           gwenview
           spectacle
           kate
-          kcalc
           flatpak
           xdg-desktop-portal
           xdg-desktop-portal-kde
@@ -121,11 +122,8 @@ jobs:
           power-profiles-daemon
           apparmor
           ufw
-          openssh
           btrfs-progs
           timeshift
-          snapper
-          snap-pac
           grub-btrfs
           inotify-tools
           pipewire
@@ -137,12 +135,11 @@ jobs:
           gst-plugin-pipewire
           networkmanager
           network-manager-applet
-          bluez
-          bluez-utils
-          cups
           mesa
           vulkan-intel
           vulkan-radeon
+          libva-intel-driver
+          libva-mesa-driver
           intel-media-driver
           nvidia-dkms
           nvidia-utils
@@ -156,24 +153,19 @@ jobs:
           wget
           reflector
           sudo
-          gparted
           ntfs-3g
           exfatprogs
           f2fs-tools
           cachyos-calamares
           noto-fonts
-          noto-fonts-cjk
           ttf-dejavu
           ttf-liberation
           papirus-icon-theme
           breeze-icons
           firefox
-          libreoffice-fresh
-          vlc
-          gimp
           EOF
 
-          # ---- إنشاء المستخدم arch (يدوي + تلقائي للتيقن) ----
+          # ---- إنشاء المستخدم arch ----
           mkdir -p airootfs/etc/skel airootfs/home/arch
           echo 'arch:x:1000:1000:arch:/home/arch:/bin/bash' >> airootfs/etc/passwd
           echo 'arch:x:1000:' >> airootfs/etc/group
@@ -260,15 +252,12 @@ jobs:
           }
           enable_service sddm.service graphical.target
           enable_service NetworkManager.service multi-user.target
-          enable_service bluetooth.service multi-user.target
           enable_service ufw.service multi-user.target
           enable_service apparmor.service multi-user.target
           enable_service ananicy-cpp.service multi-user.target
           enable_service power-profiles-daemon.service multi-user.target
           enable_service systemd-oomd.service multi-user.target
           enable_service uksmd.service multi-user.target
-          enable_service cups.service multi-user.target
-          enable_service sshd.service multi-user.target
 
           # ---- Calamares autostart ----
           mkdir -p airootfs/etc/xdg/autostart
@@ -343,7 +332,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: UPL-OS-ISO
+          name: UPL-OS-Light-ISO
           path: |
             ${{ github.workspace }}/upl-iso-build/out/*.iso
             ${{ github.workspace }}/upl-iso-build/out/checksums.txt
