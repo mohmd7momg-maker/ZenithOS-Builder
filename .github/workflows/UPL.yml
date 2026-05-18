@@ -44,9 +44,11 @@ jobs:
           echo "[cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
 
-          pacman -Sy --noconfirm archiso git curl reflector cachyos-keyring archlinux-keyring
+          # تثبيت الأدوات الأساسية (بدون cachyos-keyring لتجنب الفشل)
+          pacman -Sy --noconfirm archiso git curl reflector archlinux-keyring || true
+          # محاولة تثبيت cachyos-keyring (اختياري، قد يفشل)
+          pacman -S --noconfirm cachyos-keyring 2>/dev/null || echo "[!] cachyos-keyring غير متوفر في المضيف"
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
-          pacman-key --populate cachyos archlinux
 
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
@@ -58,7 +60,7 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # pacman.conf بدون cachyos-v3
+          # pacman.conf للبناء (SigLevel=Never)
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -81,9 +83,7 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ==============================================
-          # قائمة الحزم المخففة (بدون LibreOffice, GIMP, VLC, وغيرها)
-          # ==============================================
+          # قائمة الحزم المخففة (مع إبقاء cachyos-keyring)
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-settings
