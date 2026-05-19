@@ -86,7 +86,7 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ---- قائمة الحزم (تمت إزالة uksmd و libva-mesa-driver و libva-intel-driver) ----
+          # ---- قائمة الحزم ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-mirrorlist
@@ -354,6 +354,7 @@ jobs:
           POST
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
+          # ---- إعدادات Calamares (فقط الملفات غير الموجودة في الحزمة) ----
           mkdir -p airootfs/etc/calamares/modules
           cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALEOF'
           dontChroot: false
@@ -361,42 +362,6 @@ jobs:
           script:
               - "/usr/local/bin/upl-postinstall.sh"
           CALEOF
-
-          cat > airootfs/etc/calamares/modules/bootloader.conf <<'CALBOOT'
-          efiBootLoader: "grub"
-          grubInstall: "grub-install"
-          grubMkconfig: "grub-mkconfig"
-          grubCfg: "/boot/grub/grub.cfg"
-          grubProbe: "grub-probe"
-          efiDirectory: "/boot/efi"
-          CALBOOT
-
-          cat > airootfs/etc/calamares/modules/networkcfg.conf <<'CALNET'
-          backend: networkmanager
-          CALNET
-
-          cat > airootfs/etc/calamares/modules/users.conf <<'CALUSERS'
-          defaultGroups:
-              - name: wheel
-                must_exist: false
-                state: true
-              - name: audio
-                must_exist: false
-                state: true
-              - name: video
-                must_exist: false
-                state: true
-              - name: storage
-                must_exist: false
-                state: true
-          autologinGroup: autologin
-          doAutologin: false
-          sudoersGroup: wheel
-          setRootPassword: false
-          doReusePassword: false
-          passwordRequirements:
-              minLength: 6
-          CALUSERS
 
           cat > airootfs/etc/calamares/settings.conf <<'CALSET'
           modules-search: [ local, /usr/lib/calamares/modules ]
@@ -434,30 +399,8 @@ jobs:
           quit-at-end: false
           CALSET
 
-          cat > airootfs/etc/calamares/modules/mount.conf <<'CALMOUNT'
-          btrfsSubvolumes:
-              - mountPoint: /
-                subvolName: /@
-              - mountPoint: /home
-                subvolName: /@home
-              - mountPoint: /var/cache
-                subvolName: /@cache
-              - mountPoint: /var/log
-                subvolName: /@log
-          efiMountPoint: /boot/efi
-          CALMOUNT
-
-          cat > airootfs/etc/calamares/modules/partition.conf <<'CALPART'
-          defaultFileSystemType: "btrfs"
-          availableFileSystemTypes: ["ext4","btrfs","xfs","f2fs","swap"]
-          enableLuksAutomatedPartitioning: true
-          allowManualPartitioning: true
-          initialPartitioningChoice: "erase"
-          efi:
-              mountPoint: "/boot/efi"
-              recommendedSize: 512MiB
-              minimumSize: 256MiB
-          CALPART
+          # نحذف إنشاء mount.conf, partition.conf, users.conf, bootloader.conf
+          # لأن الحزمة cachyos-calamares توفرها
 
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
