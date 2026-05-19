@@ -86,13 +86,13 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
+          # ---- قائمة الحزم (تمت إزالة uksmd و libva-mesa-driver و libva-intel-driver) ----
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
           cachyos-mirrorlist
           cachyos-settings
           cachyos-hooks
           cachy-chroot
-          uksmd
           pciutils
           kdesu
           intel-ucode
@@ -144,8 +144,6 @@ jobs:
           mesa
           vulkan-intel
           vulkan-radeon
-          libva-intel-driver
-          libva-mesa-driver
           intel-media-driver
           htop
           fastfetch
@@ -293,7 +291,6 @@ jobs:
           enable_service ananicy-cpp.service multi-user.target
           enable_service power-profiles-daemon.service multi-user.target
           enable_service systemd-oomd.service multi-user.target
-          enable_service uksmd.service multi-user.target
           enable_service fstrim.timer timers.target
 
           mkdir -p airootfs/etc/xdg/autostart
@@ -319,7 +316,7 @@ jobs:
           pacman-key --init 2>/dev/null || true
           pacman-key --populate cachyos archlinux 2>/dev/null || true
 
-          systemctl enable uksmd apparmor ufw power-profiles-daemon 2>/dev/null || true
+          systemctl enable apparmor ufw power-profiles-daemon 2>/dev/null || true
           aa-complain /etc/apparmor.d/* 2>/dev/null || true
 
           ufw --force reset 2>/dev/null || true
