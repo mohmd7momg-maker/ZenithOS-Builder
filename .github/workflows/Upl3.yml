@@ -164,13 +164,17 @@ jobs:
           firefox
           EOF
 
+          # ---- customize_airootfs.sh (كل التخصيصات بعد تثبيت الحزم) ----
           mkdir -p airootfs/root
           cat > airootfs/root/customize_airootfs.sh <<'CUSTOMIZE'
           #!/bin/bash
+          # إنشاء المستخدم
           id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage -s /bin/bash arch
           echo "arch:arch" | chpasswd
           echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd
           chmod 440 /etc/sudoers.d/wheel-nopasswd
+
+          # polkit لـ Calamares
           mkdir -p /etc/polkit-1/rules.d
           cat > /etc/polkit-1/rules.d/49-calamares.rules <<'POLKIT'
           polkit.addRule(function(action, subject) {
@@ -181,6 +185,14 @@ jobs:
               }
           });
           POLKIT
+
+          # إضافة سكربت ما بعد التثبيت إلى shellprocess الخاص بـ Calamares
+          cat > /etc/calamares/modules/shellprocess.conf <<'CALEOF'
+          dontChroot: false
+          timeout: 600
+          script:
+              - "/usr/local/bin/upl-postinstall.sh"
+          CALEOF
           CUSTOMIZE
           chmod +x airootfs/root/customize_airootfs.sh
 
@@ -354,53 +366,8 @@ jobs:
           POST
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
-          # ---- إعدادات Calamares (فقط الملفات غير الموجودة في الحزمة) ----
-          mkdir -p airootfs/etc/calamares/modules
-          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALEOF'
-          dontChroot: false
-          timeout: 600
-          script:
-              - "/usr/local/bin/upl-postinstall.sh"
-          CALEOF
-
-          cat > airootfs/etc/calamares/settings.conf <<'CALSET'
-          modules-search: [ local, /usr/lib/calamares/modules ]
-
-          sequence:
-          - show:
-            - welcome
-            - locale
-            - keyboard
-            - partition
-            - users
-            - summary
-          - exec:
-            - partition
-            - mount
-            - unpackfs
-            - machineid
-            - fstab
-            - locale
-            - keyboard
-            - localecfg
-            - users
-            - networkcfg
-            - hwclock
-            - bootloader
-            - shellprocess
-            - umount
-          - show:
-            - finished
-
-          branding: default
-          prompt-install: true
-          dont-chroot: false
-          disable-cancel: false
-          quit-at-end: false
-          CALSET
-
-          # نحذف إنشاء mount.conf, partition.conf, users.conf, bootloader.conf
-          # لأن الحزمة cachyos-calamares توفرها
+          # ---- لا ننشئ أي ملفات Calamares هنا ----
+          # تم نقل shellprocess.conf إلى customize_airootfs.sh
 
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
