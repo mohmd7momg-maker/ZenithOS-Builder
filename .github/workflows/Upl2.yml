@@ -1,4 +1,4 @@
-name: Build UPL-OS (Light + Smart Optimizations)
+name: UPL-OS Final (Production Ready)
 
 on:
   workflow_dispatch:
@@ -41,10 +41,12 @@ jobs:
           mkdir -p /etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
 
-          echo "[cachyos]
-          Include = /etc/pacman.d/cachyos-mirrorlist" >> /etc/pacman.conf
+          cat >> /etc/pacman.conf <<'EOF'
+          [cachyos]
+          Include = /etc/pacman.d/cachyos-mirrorlist
+          EOF
 
-          pacman -Sy --noconfirm archiso git curl reflector archlinux-keyring || true
+          pacman -Syu --needed --noconfirm archiso git curl reflector archlinux-keyring
           pacman -S --noconfirm cachyos-keyring 2>/dev/null || echo "[!] cachyos-keyring غير متوفر في المضيف"
           reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
 
@@ -58,7 +60,10 @@ jobs:
 
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
-          # pacman.conf للبناء (SigLevel=Never للبناء فقط)
+          for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
+              [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
+          done
+
           cat > pacman.conf <<'EOF'
           [options]
           HoldPkg     = pacman glibc
@@ -81,14 +86,15 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ==============================================
-          # قائمة الحزم الخفيفة
-          # ==============================================
           cat >> packages.x86_64 <<'EOF'
           cachyos-keyring
+          cachyos-mirrorlist
           cachyos-settings
           cachyos-hooks
           cachy-chroot
+          uksmd
+          pciutils
+          kdesu
           intel-ucode
           amd-ucode
           dkms
@@ -141,11 +147,6 @@ jobs:
           libva-intel-driver
           libva-mesa-driver
           intel-media-driver
-          nvidia-dkms
-          nvidia-utils
-          lib32-nvidia-utils
-          xf86-video-amdgpu
-          xf86-video-intel
           htop
           fastfetch
           git
@@ -165,14 +166,27 @@ jobs:
           firefox
           EOF
 
-          # ---- إنشاء المستخدم arch ----
-          mkdir -p airootfs/etc/skel airootfs/home/arch
-          echo 'arch:x:1000:1000:arch:/home/arch:/bin/bash' >> airootfs/etc/passwd
-          echo 'arch:x:1000:' >> airootfs/etc/group
-          echo 'arch:!*:19700::::::' >> airootfs/etc/shadow
-          echo 'arch:!::' >> airootfs/etc/gshadow
-          chown -R 1000:1000 airootfs/home/arch
-          chmod 750 airootfs/home/arch
+          mkdir -p airootfs/root
+          cat > airootfs/root/customize_airootfs.sh <<'CUSTOMIZE'
+          #!/bin/bash
+          id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage -s /bin/bash arch
+          echo "arch:arch" | chpasswd
+          echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd
+          chmod 440 /etc/sudoers.d/wheel-nopasswd
+          mkdir -p /etc/polkit-1/rules.d
+          cat > /etc/polkit-1/rules.d/49-calamares.rules <<'POLKIT'
+          polkit.addRule(function(action, subject) {
+              if (action.id === "org.freedesktop.policykit.exec" &&
+                  action.lookup("program") === "/usr/bin/cachyos-calamares" &&
+                  subject.isInGroup("wheel")) {
+                  return polkit.Result.YES;
+              }
+          });
+          POLKIT
+          CUSTOMIZE
+          chmod +x airootfs/root/customize_airootfs.sh
+
+          mkdir -p airootfs/etc/skel
           cat > airootfs/etc/skel/.bashrc <<'BASHRC'
           [[ $- != *i* ]] && return
           PS1='[\u@\h \W]\$ '
@@ -183,24 +197,13 @@ jobs:
           cat > airootfs/etc/skel/.bash_profile <<'BASHPROF'
           [[ -f ~/.bashrc ]] && . ~/.bashrc
           BASHPROF
-          mkdir -p airootfs/etc/sudoers.d
-          echo 'arch ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/arch
-          chmod 440 airootfs/etc/sudoers.d/arch
 
-          # ---- Nvidia Early KMS (طريقة Drop-in الآمنة) ----
-          mkdir -p airootfs/etc/mkinitcpio.conf.d
-          cat > airootfs/etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
-          MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
-          NVIDIACONF
-
-          # ---- Nvidia إدارة الطاقة ----
           mkdir -p airootfs/etc/modprobe.d
           cat > airootfs/etc/modprobe.d/nvidia-power.conf <<'NVPOWER'
           options nvidia NVreg_DynamicPowerManagement=0x02
           options nvidia NVreg_UsePageAttributeTable=1
           NVPOWER
 
-          # ---- sysctl المحسّن ----
           mkdir -p airootfs/etc/sysctl.d
           cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'EOF'
           vm.swappiness=80
@@ -226,7 +229,9 @@ jobs:
           net.ipv4.conf.default.rp_filter=1
           EOF
 
-          # ---- zram ----
+          mkdir -p airootfs/etc/modules-load.d
+          echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
+
           mkdir -p airootfs/etc/systemd/zram-generator.conf.d
           cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'EOF'
           [zram0]
@@ -235,7 +240,6 @@ jobs:
           swap-priority = 100
           EOF
 
-          # ---- systemd-oomd ----
           mkdir -p airootfs/etc/systemd/oomd.conf.d
           cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'EOF'
           [OOM]
@@ -244,15 +248,13 @@ jobs:
           DefaultMemoryPressureLimit=60%
           EOF
 
-          # ---- قاعدة udev لأقراص التخزين ----
           mkdir -p airootfs/etc/udev/rules.d
           cat > airootfs/etc/udev/rules.d/60-ioschedulers.rules <<'UEOF'
           ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
           ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
-          ACTION=="add|change", KERNEL=="nvme*[!0-9]|sr*", ATTR{queue/scheduler}="none"
+          ACTION=="add|change", KERNEL=="nvme*[!0-9]", ATTR{queue/scheduler}="none"
           UEOF
 
-          # ---- تحجيم journald ----
           mkdir -p airootfs/etc/systemd/journald.conf.d
           cat > airootfs/etc/systemd/journald.conf.d/limit-size.conf <<'JEOF'
           [Journal]
@@ -260,7 +262,6 @@ jobs:
           RuntimeMaxUse=50M
           JEOF
 
-          # ---- تسريع إقلاع systemd ----
           mkdir -p airootfs/etc/systemd/system.conf.d
           cat > airootfs/etc/systemd/system.conf.d/startup-timeout.conf <<'SEOF'
           [Manager]
@@ -268,7 +269,6 @@ jobs:
           DefaultTimeoutStopSec=10s
           SEOF
 
-          # ---- SDDM ----
           mkdir -p airootfs/etc/sddm.conf.d
           cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
           [Autologin]
@@ -281,8 +281,10 @@ jobs:
           EOF
 
           enable_service() {
-              mkdir -p "airootfs/etc/systemd/system/$2.wants"
-              ln -sf "/usr/lib/systemd/system/$1" "airootfs/etc/systemd/system/$2.wants/$1"
+              local service_name="$1"
+              local target_wants="$2"
+              mkdir -p "airootfs/etc/systemd/system/${target_wants}.wants"
+              ln -sf "/usr/lib/systemd/system/${service_name}" "airootfs/etc/systemd/system/${target_wants}.wants/${service_name}"
           }
           enable_service sddm.service graphical.target
           enable_service NetworkManager.service multi-user.target
@@ -294,13 +296,12 @@ jobs:
           enable_service uksmd.service multi-user.target
           enable_service fstrim.timer timers.target
 
-          # ---- Calamares autostart ----
           mkdir -p airootfs/etc/xdg/autostart
           cat > airootfs/etc/xdg/autostart/calamares.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=Install System
-          Exec=cachyos-calamares
+          Exec=kdesu cachyos-calamares
           Icon=system-software-install
           Categories=System;
           X-GNOME-Autostart-enabled=true
@@ -308,7 +309,6 @@ jobs:
           NoDisplay=false
           EOF
 
-          # ---- سكربت ما بعد التثبيت (مع إعدادات GRUB) ----
           mkdir -p airootfs/usr/local/bin
           cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POST'
           #!/bin/bash
@@ -320,7 +320,7 @@ jobs:
           pacman-key --populate cachyos archlinux 2>/dev/null || true
 
           systemctl enable uksmd apparmor ufw power-profiles-daemon 2>/dev/null || true
-          aa-enforce /etc/apparmor.d/* 2>/dev/null || true
+          aa-complain /etc/apparmor.d/* 2>/dev/null || true
 
           ufw --force reset 2>/dev/null || true
           ufw default deny incoming
@@ -330,35 +330,26 @@ jobs:
 
           flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
 
-          echo "[*] إعداد GRUB مع معاملات الأداء..."
-          if [ -d /sys/firmware/efi ]; then
-              if mountpoint -q /boot/efi; then
-                  grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=UPL-OS --removable 2>/dev/null || true
-              fi
-          else
-              ROOT_DEV=$(findmnt -n -o SOURCE / | head -1)
-              DISK=$(lsblk -n -o PKNAME "$ROOT_DEV" 2>/dev/null | head -1)
-              if [ -n "$DISK" ]; then
-                  grub-install --target=i386-pc "/dev/$DISK" 2>/dev/null || true
-              fi
+          if lspci | grep -qi nvidia; then
+              pacman -S --noconfirm nvidia-dkms nvidia-utils lib32-nvidia-utils
+              mkdir -p /etc/mkinitcpio.conf.d
+              cat > /etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
+          MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+          NVIDIACONF
+              mkinitcpio -P
           fi
 
-          # إضافة معاملات النواة لتحسين الأداء
           if [ -f /etc/default/grub ]; then
               if ! grep -q "nowatchdog" /etc/default/grub; then
-                  sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="nowatchdog clocksource=tsc /' /etc/default/grub
+                  sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="\)/\1nowatchdog lsm=landlock,lockdown,yama,apparmor,bpf /' /etc/default/grub
               fi
               if ! grep -q "GRUB_DISABLE_OS_PROBER=false" /etc/default/grub; then
                   echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
               fi
+              grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
           fi
 
-          grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-
-          rm -f /etc/sudoers.d/arch
-
-          # Timeshift snapshot أولي
-          if command -v timeshift &>/dev/null && [ "$(stat -c %T / 2>/dev/null)" = "btrfs" ]; then
+          if command -v timeshift &>/dev/null && [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
               timeshift --create --comments "لقطة أولية" --tags D 2>/dev/null || true
           fi
 
@@ -366,20 +357,124 @@ jobs:
           POST
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
-          # ---- حفظ pacman.conf للنظام المثبت (مع SigLevel = Required) ----
+          mkdir -p airootfs/etc/calamares/modules
+          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALEOF'
+          dontChroot: false
+          timeout: 600
+          script:
+              - "/usr/local/bin/upl-postinstall.sh"
+          CALEOF
+
+          cat > airootfs/etc/calamares/modules/bootloader.conf <<'CALBOOT'
+          efiBootLoader: "grub"
+          grubInstall: "grub-install"
+          grubMkconfig: "grub-mkconfig"
+          grubCfg: "/boot/grub/grub.cfg"
+          grubProbe: "grub-probe"
+          efiDirectory: "/boot/efi"
+          CALBOOT
+
+          cat > airootfs/etc/calamares/modules/networkcfg.conf <<'CALNET'
+          backend: networkmanager
+          CALNET
+
+          cat > airootfs/etc/calamares/modules/users.conf <<'CALUSERS'
+          defaultGroups:
+              - name: wheel
+                must_exist: false
+                state: true
+              - name: audio
+                must_exist: false
+                state: true
+              - name: video
+                must_exist: false
+                state: true
+              - name: storage
+                must_exist: false
+                state: true
+          autologinGroup: autologin
+          doAutologin: false
+          sudoersGroup: wheel
+          setRootPassword: false
+          doReusePassword: false
+          passwordRequirements:
+              minLength: 6
+          CALUSERS
+
+          cat > airootfs/etc/calamares/settings.conf <<'CALSET'
+          modules-search: [ local, /usr/lib/calamares/modules ]
+
+          sequence:
+          - show:
+            - welcome
+            - locale
+            - keyboard
+            - partition
+            - users
+            - summary
+          - exec:
+            - partition
+            - mount
+            - unpackfs
+            - machineid
+            - fstab
+            - locale
+            - keyboard
+            - localecfg
+            - users
+            - networkcfg
+            - hwclock
+            - bootloader
+            - shellprocess
+            - umount
+          - show:
+            - finished
+
+          branding: default
+          prompt-install: true
+          dont-chroot: false
+          disable-cancel: false
+          quit-at-end: false
+          CALSET
+
+          cat > airootfs/etc/calamares/modules/mount.conf <<'CALMOUNT'
+          btrfsSubvolumes:
+              - mountPoint: /
+                subvolName: /@
+              - mountPoint: /home
+                subvolName: /@home
+              - mountPoint: /var/cache
+                subvolName: /@cache
+              - mountPoint: /var/log
+                subvolName: /@log
+          efiMountPoint: /boot/efi
+          CALMOUNT
+
+          cat > airootfs/etc/calamares/modules/partition.conf <<'CALPART'
+          defaultFileSystemType: "btrfs"
+          availableFileSystemTypes: ["ext4","btrfs","xfs","f2fs","swap"]
+          enableLuksAutomatedPartitioning: true
+          allowManualPartitioning: true
+          initialPartitioningChoice: "erase"
+          efi:
+              mountPoint: "/boot/efi"
+              recommendedSize: 512MiB
+              minimumSize: 256MiB
+          CALPART
+
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
           echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
           cp /tmp/pacman_clean.conf airootfs/usr/local/share/upl/pacman.conf
 
-          # ---- ضغط squashfs ----
-          if grep -q "^squashfs_options=" profiledef.sh; then
-              sed -i "s|^squashfs_options=.*|squashfs_options=\"-comp zstd -Xcompression-level 1\"|" profiledef.sh
+          if grep -q "^airootfs_image_tool_options=" profiledef.sh; then
+              sed -i 's|^airootfs_image_tool_options=.*|airootfs_image_tool_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
+          elif grep -q "^squashfs_options=" profiledef.sh; then
+              sed -i 's|^squashfs_options=.*|squashfs_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
           else
-              echo "squashfs_options=\"-comp zstd -Xcompression-level 1\"" >> profiledef.sh
+              echo 'airootfs_image_tool_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
           fi
 
-          # ---- بناء ISO ----
           echo "بدء mkarchiso..."
           mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
           echo "انتهى mkarchiso"
@@ -411,6 +506,10 @@ jobs:
             archlinux:latest \
             /workspace/build.sh
 
+      - name: Post-build cleanup permissions for Actions Cache
+        run: |
+          sudo chown -R $(whoami) ${{ github.workspace }}/pacman-cache || true
+
       - name: Verify ISO creation
         run: |
           ls -la ${{ github.workspace }}/upl-iso-build/out/
@@ -425,7 +524,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: UPL-OS-Smart-Optimized-ISO
+          name: UPL-OS-Final-ISO
           path: |
             ${{ github.workspace }}/upl-iso-build/out/*.iso
             ${{ github.workspace }}/upl-iso-build/out/checksums.txt
