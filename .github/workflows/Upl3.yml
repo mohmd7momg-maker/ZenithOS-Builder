@@ -164,17 +164,15 @@ jobs:
           firefox
           EOF
 
-          # ---- customize_airootfs.sh (كل التخصيصات بعد تثبيت الحزم) ----
+          # ---- customize_airootfs.sh ----
           mkdir -p airootfs/root
           cat > airootfs/root/customize_airootfs.sh <<'CUSTOMIZE'
           #!/bin/bash
-          # إنشاء المستخدم
           id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage -s /bin/bash arch
           echo "arch:arch" | chpasswd
           echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd
           chmod 440 /etc/sudoers.d/wheel-nopasswd
 
-          # polkit لـ Calamares
           mkdir -p /etc/polkit-1/rules.d
           cat > /etc/polkit-1/rules.d/49-calamares.rules <<'POLKIT'
           polkit.addRule(function(action, subject) {
@@ -186,7 +184,7 @@ jobs:
           });
           POLKIT
 
-          # إضافة سكربت ما بعد التثبيت إلى shellprocess الخاص بـ Calamares
+          # ربط سكربت ما بعد التثبيت بـ Calamares
           cat > /etc/calamares/modules/shellprocess.conf <<'CALEOF'
           dontChroot: false
           timeout: 600
@@ -366,20 +364,16 @@ jobs:
           POST
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
-          # ---- لا ننشئ أي ملفات Calamares هنا ----
-          # تم نقل shellprocess.conf إلى customize_airootfs.sh
-
           mkdir -p airootfs/usr/local/share/upl
           grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
           echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
           cp /tmp/pacman_clean.conf airootfs/usr/local/share/upl/pacman.conf
 
-          if grep -q "^airootfs_image_tool_options=" profiledef.sh; then
-              sed -i 's|^airootfs_image_tool_options=.*|airootfs_image_tool_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
-          elif grep -q "^squashfs_options=" profiledef.sh; then
+          # ---- ضبط ضغط SquashFS (المتغير الصحيح) ----
+          if grep -q "^squashfs_options=" profiledef.sh; then
               sed -i 's|^squashfs_options=.*|squashfs_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
           else
-              echo 'airootfs_image_tool_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
+              echo 'squashfs_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
           fi
 
           echo "بدء mkarchiso..."
