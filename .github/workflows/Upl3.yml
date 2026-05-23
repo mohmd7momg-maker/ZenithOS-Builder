@@ -351,14 +351,18 @@ jobs:
           POSTINSTALL
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
-          # 12. Calamares shellprocess فقط
-          mkdir -p airootfs/etc/calamares/modules
-          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALSHELL'
+          # 12. customize_airootfs.sh (لتجنب تعارض Calamares)
+          cat > "$PROFILE_DIR/customize_airootfs.sh" <<'CUSTOMIZE'
+          #!/bin/bash
+          # يكتب shellprocess.conf بعد تثبيت الحزمة بأمان
+          cat > /etc/calamares/modules/shellprocess.conf <<'CALEOF'
           dontChroot: false
           timeout: 600
           script:
               - "/usr/local/bin/upl-postinstall.sh"
-          CALSHELL
+          CALEOF
+          CUSTOMIZE
+          chmod +x "$PROFILE_DIR/customize_airootfs.sh"
 
           # 13. pacman.conf للنظام المثبت
           mkdir -p airootfs/usr/local/share/upl
