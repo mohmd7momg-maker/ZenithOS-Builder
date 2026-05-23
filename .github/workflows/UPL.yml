@@ -1,4 +1,4 @@
-name: UPL-OS 0.2.2
+name: UPL-OS 0.2.2.0
 
 on:
   workflow_dispatch:
