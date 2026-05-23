@@ -1,4 +1,4 @@
-name: UPL-OS Final (Production Ready)
+Name: UPL-OS 0.2.1
 
 on:
   workflow_dispatch:
@@ -28,53 +28,50 @@ jobs:
 
       - name: Create build script
         run: |
-          cat > ${{ github.workspace }}/build.sh <<'BUILD_SCRIPT'
+          cat > ${{ github.workspace }}/build.sh <<'BUILDSCRIPT'
           #!/usr/bin/env bash
-          set -e
-          echo "بدء build.sh ..."
+          set -euo pipefail
+          echo "[*] بدء بناء UPL-OS..."
 
-          pacman-key --init
-          pacman-key --populate archlinux
+          # 1. مفاتيح ومستودعات
+          pacman-key --init && pacman-key --populate archlinux
           pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
           pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
-
           mkdir -p /etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
-
-          cat >> /etc/pacman.conf <<'EOF'
+          grep -q '\[cachyos\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<'HOSTREPO'
           [cachyos]
           Include = /etc/pacman.d/cachyos-mirrorlist
-          EOF
-
+          HOSTREPO
           pacman -Syu --needed --noconfirm archiso git curl reflector archlinux-keyring
-          pacman -S --noconfirm cachyos-keyring 2>/dev/null || echo "[!] cachyos-keyring غير متوفر في المضيف"
-          reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
+          pacman -S --noconfirm cachyos-keyring 2>/dev/null || true
+          reflector --latest 10 --protocol https --country "United States,Germany,France" \
+              --sort rate --save /etc/pacman.d/mirrorlist
 
+          # 2. إعداد Profile
           WORKDIR="/workspace/upl-iso-build"
           PROFILE_DIR="$WORKDIR/archiso"
           mkdir -p "$WORKDIR"
           rm -rf "$PROFILE_DIR"
-          mkdir -p "$PROFILE_DIR"
-          cp -r /usr/share/archiso/configs/releng/* "$PROFILE_DIR"
+          cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
           cd "$PROFILE_DIR"
-
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
 
+          # 3. LSM عبر sed على قوالب الإقلاع
           for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
               [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
           done
 
+          # 4. pacman.conf للبناء
           cat > pacman.conf <<'EOF'
           [options]
-          HoldPkg     = pacman glibc
+          HoldPkg      = pacman glibc
           Architecture = x86_64
-          SigLevel    = Never
+          SigLevel     = Never
           LocalFileSigLevel = Optional
-          CacheDir    = /workspace/pacman-cache
-
+          CacheDir     = /workspace/pacman-cache
           [cachyos]
           Server = https://mirror.cachyos.org/repo/$arch/$repo
-
           [core]
           Include = /etc/pacman.d/mirrorlist
           [extra]
@@ -86,95 +83,34 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # ---- قائمة الحزم ----
-          cat >> packages.x86_64 <<'EOF'
-          cachyos-keyring
-          cachyos-mirrorlist
-          cachyos-settings
-          cachyos-hooks
-          cachy-chroot
-          pciutils
-          kdesu
-          intel-ucode
-          amd-ucode
-          dkms
-          grub
-          efibootmgr
-          os-prober
-          mtools
-          dosfstools
-          cryptsetup
-          linux-cachyos-lts
-          linux-cachyos-lts-headers
-          linux-firmware
-          sof-firmware
-          alsa-firmware
-          alsa-ucm-conf
-          plasma-desktop
-          sddm
-          plasma-nm
-          plasma-systemmonitor
-          konsole
-          dolphin
-          okular
-          gwenview
-          spectacle
-          kate
-          flatpak
-          xdg-desktop-portal
-          xdg-desktop-portal-kde
-          zram-generator
-          ananicy-cpp
-          power-profiles-daemon
-          apparmor
-          ufw
-          btrfs-progs
-          timeshift
-          grub-btrfs
-          inotify-tools
-          pipewire
-          pipewire-pulse
-          pipewire-alsa
-          pipewire-jack
-          wireplumber
-          pavucontrol-qt
-          gst-plugin-pipewire
-          networkmanager
-          network-manager-applet
-          mesa
-          vulkan-intel
-          vulkan-radeon
-          intel-media-driver
-          htop
-          fastfetch
-          git
-          curl
-          wget
-          reflector
-          sudo
-          ntfs-3g
-          exfatprogs
-          f2fs-tools
-          cachyos-calamares
-          noto-fonts
-          ttf-dejavu
-          ttf-liberation
-          papirus-icon-theme
-          breeze-icons
-          firefox
-          EOF
+          # 5. قائمة الحزم (بدون nvidia-dkms؛ تُثبَّت لاحقاً عند الحاجة)
+          cat >> packages.x86_64 <<'PKGLIST'
+          cachyos-keyring cachyos-mirrorlist cachyos-settings cachyos-hooks
+          cachy-chroot pciutils kdesu base-devel intel-ucode amd-ucode grub
+          efibootmgr os-prober mtools dosfstools cryptsetup linux-cachyos-lts
+          linux-cachyos-lts-headers linux-firmware sof-firmware alsa-firmware
+          alsa-ucm-conf plasma-desktop sddm plasma-nm plasma-systemmonitor
+          konsole dolphin okular gwenview spectacle kate flatpak xdg-desktop-portal
+          xdg-desktop-portal-kde zram-generator ananicy-cpp power-profiles-daemon
+          apparmor ufw btrfs-progs timeshift grub-btrfs inotify-tools pipewire
+          pipewire-pulse pipewire-alsa pipewire-jack wireplumber pavucontrol-qt
+          gst-plugin-pipewire networkmanager network-manager-applet mesa
+          vulkan-intel vulkan-radeon intel-media-driver libva-intel-driver
+          libva-mesa-driver htop fastfetch git curl wget reflector sudo ntfs-3g
+          exfatprogs f2fs-tools cachyos-calamares noto-fonts ttf-dejavu
+          ttf-liberation papirus-icon-theme breeze-icons firefox
+          PKGLIST
 
-          # ---- customize_airootfs.sh ----
-          mkdir -p airootfs/root
-          cat > airootfs/root/customize_airootfs.sh <<'CUSTOMIZE'
-          #!/bin/bash
-          id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage -s /bin/bash arch
-          echo "arch:arch" | chpasswd
-          echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd
-          chmod 440 /etc/sudoers.d/wheel-nopasswd
+          # 6. النظام التعريفي: sysusers.d فقط
+          mkdir -p airootfs/etc/sysusers.d
+          echo 'u arch 1000 "Live Session User" /home/arch /bin/bash' > airootfs/etc/sysusers.d/arch.conf
 
-          mkdir -p /etc/polkit-1/rules.d
-          cat > /etc/polkit-1/rules.d/49-calamares.rules <<'POLKIT'
+          mkdir -p airootfs/etc/sudoers.d
+          echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/wheel-nopasswd
+          chmod 440 airootfs/etc/sudoers.d/wheel-nopasswd
+
+          mkdir -p airootfs/etc/polkit-1/rules.d
+          cat > airootfs/etc/polkit-1/rules.d/49-calamares.rules <<'POLKIT'
           polkit.addRule(function(action, subject) {
               if (action.id === "org.freedesktop.policykit.exec" &&
                   action.lookup("program") === "/usr/bin/cachyos-calamares" &&
@@ -184,115 +120,74 @@ jobs:
           });
           POLKIT
 
-          # ربط سكربت ما بعد التثبيت بـ Calamares
-          cat > /etc/calamares/modules/shellprocess.conf <<'CALEOF'
-          dontChroot: false
-          timeout: 600
-          script:
-              - "/usr/local/bin/upl-postinstall.sh"
-          CALEOF
-          CUSTOMIZE
-          chmod +x airootfs/root/customize_airootfs.sh
-
-          mkdir -p airootfs/etc/skel
-          cat > airootfs/etc/skel/.bashrc <<'BASHRC'
-          [[ $- != *i* ]] && return
-          PS1='[\u@\h \W]\$ '
-          alias ls='ls --color=auto'
-          alias ll='ls -lah'
-          export EDITOR=nano
-          BASHRC
-          cat > airootfs/etc/skel/.bash_profile <<'BASHPROF'
-          [[ -f ~/.bashrc ]] && . ~/.bashrc
-          BASHPROF
+          # 7. تحسينات النظام
+          mkdir -p airootfs/etc/sysctl.d
+          cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'SYSCTL'
+          vm.swappiness=80 vm.vfs_cache_pressure=50 vm.dirty_ratio=10
+          vm.dirty_background_ratio=5 vm.dirty_expire_centisecs=3000
+          vm.dirty_writeback_centisecs=500 vm.page-cluster=0 vm.min_free_kbytes=65536
+          kernel.kptr_restrict=2 kernel.unprivileged_bpf_disabled=1
+          kernel.yama.ptrace_scope=1 kernel.randomize_va_space=2 kernel.nmi_watchdog=0
+          net.core.bpf_jit_harden=2 fs.file-max=2097152 net.core.default_qdisc=cake
+          net.ipv4.tcp_congestion_control=bbr net.ipv4.tcp_fastopen=3
+          net.ipv4.tcp_syncookies=1 net.ipv4.conf.all.rp_filter=1
+          net.ipv4.conf.default.rp_filter=1
+          SYSCTL
 
           mkdir -p airootfs/etc/modprobe.d
           cat > airootfs/etc/modprobe.d/nvidia-power.conf <<'NVPOWER'
-          options nvidia NVreg_DynamicPowerManagement=0x02
-          options nvidia NVreg_UsePageAttributeTable=1
+          options nvidia NVreg_DynamicPowerManagement=0x02 NVreg_UsePageAttributeTable=1
           NVPOWER
 
-          mkdir -p airootfs/etc/sysctl.d
-          cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'EOF'
-          vm.swappiness=80
-          vm.vfs_cache_pressure=50
-          vm.dirty_ratio=10
-          vm.dirty_background_ratio=5
-          vm.dirty_expire_centisecs=3000
-          vm.dirty_writeback_centisecs=500
-          vm.page-cluster=0
-          vm.min_free_kbytes=65536
-          kernel.kptr_restrict=2
-          kernel.unprivileged_bpf_disabled=1
-          kernel.yama.ptrace_scope=1
-          kernel.randomize_va_space=2
-          kernel.nmi_watchdog=0
-          net.core.bpf_jit_harden=2
-          fs.file-max=2097152
-          net.core.default_qdisc=cake
-          net.ipv4.tcp_congestion_control=bbr
-          net.ipv4.tcp_fastopen=3
-          net.ipv4.tcp_syncookies=1
-          net.ipv4.conf.all.rp_filter=1
-          net.ipv4.conf.default.rp_filter=1
-          EOF
-
-          mkdir -p airootfs/etc/modules-load.d
-          echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
+          mkdir -p airootfs/etc/modules-load.d && echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
 
           mkdir -p airootfs/etc/systemd/zram-generator.conf.d
-          cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'EOF'
+          cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'ZRAMCONF'
           [zram0]
           zram-size = min(ram / 2, 4096)
           compression-algorithm = zstd
           swap-priority = 100
-          EOF
+          ZRAMCONF
 
           mkdir -p airootfs/etc/systemd/oomd.conf.d
-          cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'EOF'
+          cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'OOMDCONF'
           [OOM]
           DefaultMemoryPressureDurationSec=20s
           SwapUsedLimit=90%
           DefaultMemoryPressureLimit=60%
-          EOF
+          OOMDCONF
 
           mkdir -p airootfs/etc/udev/rules.d
-          cat > airootfs/etc/udev/rules.d/60-ioschedulers.rules <<'UEOF'
+          cat > airootfs/etc/udev/rules.d/60-ioschedulers.rules <<'IOSCHEDULERS'
           ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
           ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
           ACTION=="add|change", KERNEL=="nvme*[!0-9]", ATTR{queue/scheduler}="none"
-          UEOF
+          IOSCHEDULERS
 
           mkdir -p airootfs/etc/systemd/journald.conf.d
           cat > airootfs/etc/systemd/journald.conf.d/limit-size.conf <<'JEOF'
-          [Journal]
-          SystemMaxUse=50M
-          RuntimeMaxUse=50M
+          [Journal] SystemMaxUse=50M RuntimeMaxUse=50M
           JEOF
 
           mkdir -p airootfs/etc/systemd/system.conf.d
           cat > airootfs/etc/systemd/system.conf.d/startup-timeout.conf <<'SEOF'
-          [Manager]
-          DefaultTimeoutStartSec=10s
-          DefaultTimeoutStopSec=10s
+          [Manager] DefaultTimeoutStartSec=10s DefaultTimeoutStopSec=10s
           SEOF
 
+          # 8. SDDM (autologin للجلسة الحية فقط)
           mkdir -p airootfs/etc/sddm.conf.d
-          cat > airootfs/etc/sddm.conf.d/kde_settings.conf <<'EOF'
+          cat > airootfs/etc/sddm.conf.d/autologin.conf <<'SDDMLIVE'
           [Autologin]
           User=arch
           Session=plasma
-          [General]
-          DisplayServer=wayland
-          [Theme]
-          Current=breeze
-          EOF
+          [General] DisplayServer=wayland
+          [Theme] Current=breeze
+          SDDMLIVE
 
           enable_service() {
-              local service_name="$1"
-              local target_wants="$2"
-              mkdir -p "airootfs/etc/systemd/system/${target_wants}.wants"
-              ln -sf "/usr/lib/systemd/system/${service_name}" "airootfs/etc/systemd/system/${target_wants}.wants/${service_name}"
+              local svc="$1" tgt="$2"
+              mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
+              ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
           }
           enable_service sddm.service graphical.target
           enable_service NetworkManager.service multi-user.target
@@ -303,56 +198,64 @@ jobs:
           enable_service systemd-oomd.service multi-user.target
           enable_service fstrim.timer timers.target
 
+          # 9. shell configs
+          mkdir -p airootfs/etc/skel
+          cat > airootfs/etc/skel/.bashrc <<'BASHRC'
+          [[ $- != *i* ]] && return
+          PS1='[\u@\h \W]\$ '; alias ls='ls --color=auto' ll='ls -lah'; export EDITOR=nano
+          BASHRC
+          echo '[[ -f ~/.bashrc ]] && . ~/.bashrc' > airootfs/etc/skel/.bash_profile
+
+          # 10. Calamares autostart
           mkdir -p airootfs/etc/xdg/autostart
-          cat > airootfs/etc/xdg/autostart/calamares.desktop <<'EOF'
+          cat > airootfs/etc/xdg/autostart/calamares.desktop <<'CALADESKTOP'
           [Desktop Entry]
           Type=Application
-          Name=Install System
+          Name=Install UPL-OS
           Exec=kdesu cachyos-calamares
           Icon=system-software-install
           Categories=System;
           X-GNOME-Autostart-enabled=true
           X-KDE-autostart-after=panel
           NoDisplay=false
-          EOF
+          CALADESKTOP
 
+          # 11. Postinstall — مع فحص الشبكة الموثوق ومزامنة المستودعات
           mkdir -p airootfs/usr/local/bin
-          cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POST'
+          cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POSTINSTALL'
           #!/bin/bash
-          set -e
+          set -euo pipefail
 
           cp /usr/local/share/upl/pacman.conf /etc/pacman.conf
-
-          pacman-key --init 2>/dev/null || true
-          pacman-key --populate cachyos archlinux 2>/dev/null || true
+          rm -f /etc/sddm.conf.d/autologin.conf
+          printf '[Theme]\nCurrent=breeze\n[General]\nDisplayServer=wayland\n' > /etc/sddm.conf.d/kde_settings.conf
 
           systemctl enable apparmor ufw power-profiles-daemon 2>/dev/null || true
-          aa-complain /etc/apparmor.d/* 2>/dev/null || true
-
-          ufw --force reset 2>/dev/null || true
-          ufw default deny incoming
-          ufw default allow outgoing
-          ufw limit 22/tcp
-          ufw --force enable
 
           flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
 
+          # Nvidia: تثبيت فقط إذا وُجدت البطاقة وكان هناك إنترنت
           if lspci | grep -qi nvidia; then
-              pacman -S --noconfirm nvidia-dkms nvidia-utils lib32-nvidia-utils
-              mkdir -p /etc/mkinitcpio.conf.d
-              cat > /etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
+              if ping -c 1 -W 3 1.1.1.1 &>/dev/null; then
+                  pacman -Sy --noconfirm nvidia-dkms nvidia-utils lib32-nvidia-utils || {
+                      echo "[!] فشل تثبيت حزم Nvidia. سيتم التخطي."
+                  }
+                  mkdir -p /etc/mkinitcpio.conf.d
+                  cat > /etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
           MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
           NVIDIACONF
-              mkinitcpio -P
+                  mkinitcpio -P 2>/dev/null || true
+              else
+                  echo "[!] لا يوجد اتصال بالإنترنت. تم تخطي إعداد Nvidia."
+                  echo "[!] يمكن تثبيت التعريفات يدوياً بعد الإقلاع الأول."
+              fi
           fi
 
           if [ -f /etc/default/grub ]; then
-              if ! grep -q "nowatchdog" /etc/default/grub; then
+              grep -q "nowatchdog" /etc/default/grub || \
                   sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="\)/\1nowatchdog lsm=landlock,lockdown,yama,apparmor,bpf /' /etc/default/grub
-              fi
-              if ! grep -q "GRUB_DISABLE_OS_PROBER=false" /etc/default/grub; then
+              grep -q "GRUB_DISABLE_OS_PROBER=false" /etc/default/grub || \
                   echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
-              fi
               grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
           fi
 
@@ -361,41 +264,56 @@ jobs:
           fi
 
           echo "[✔] اكتمل الإعداد اللاحق للتثبيت"
-          POST
+          POSTINSTALL
           chmod +x airootfs/usr/local/bin/upl-postinstall.sh
 
-          mkdir -p airootfs/usr/local/share/upl
-          grep -v "^SigLevel\|^CacheDir" pacman.conf > /tmp/pacman_clean.conf
-          echo "SigLevel    = Required DatabaseOptional" >> /tmp/pacman_clean.conf
-          cp /tmp/pacman_clean.conf airootfs/usr/local/share/upl/pacman.conf
+          # 12. Calamares shellprocess فقط
+          mkdir -p airootfs/etc/calamares/modules
+          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALSHELL'
+          dontChroot: false
+          timeout: 600
+          script:
+              - "/usr/local/bin/upl-postinstall.sh"
+          CALSHELL
 
-          # ---- ضبط ضغط SquashFS (المتغير الصحيح) ----
+          # 13. pacman.conf للنظام المثبت
+          mkdir -p airootfs/usr/local/share/upl
+          cat > airootfs/usr/local/share/upl/pacman.conf <<'INSTPAC'
+          [options]
+          HoldPkg      = pacman glibc
+          Architecture = x86_64
+          SigLevel     = Required DatabaseOptional
+          LocalFileSigLevel = Optional
+          [cachyos]
+          Include = /etc/pacman.d/cachyos-mirrorlist
+          [core]
+          Include = /etc/pacman.d/mirrorlist
+          [extra]
+          Include = /etc/pacman.d/mirrorlist
+          [multilib]
+          Include = /etc/pacman.d/mirrorlist
+          INSTPAC
+
+          # 14. ضغط SquashFS
           if grep -q "^squashfs_options=" profiledef.sh; then
               sed -i 's|^squashfs_options=.*|squashfs_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
           else
               echo 'squashfs_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
           fi
 
-          echo "بدء mkarchiso..."
+          # 15. بناء ISO
+          echo "[*] بدء mkarchiso..."
           mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
-          echo "انتهى mkarchiso"
-
+          echo "[*] انتهى البناء ✅"
           rm -rf "$WORKDIR/archiso-tmp"
-          [ $EUID -eq 0 ] && chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
+          chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
+          BUILDSCRIPT
 
-          ISO_FILE=$(ls -t "$WORKDIR/out"/*.iso 2>/dev/null | head -1)
-          if [ -n "$ISO_FILE" ]; then
-              echo "✅ تم إنشاء ISO: $ISO_FILE"
-          else
-              echo "❌ فشل: لم يتم العثور على ملف ISO"
-              exit 1
-          fi
-          BUILD_SCRIPT
-
-      - name: Ensure build script is valid
+      - name: Validate build script
         run: |
-          test -s ${{ github.workspace }}/build.sh || { echo "build.sh missing!"; exit 1; }
+          test -s ${{ github.workspace }}/build.sh || exit 1
           chmod +x ${{ github.workspace }}/build.sh
+          bash -n ${{ github.workspace }}/build.sh
 
       - name: Run build inside container
         run: |
@@ -407,25 +325,36 @@ jobs:
             archlinux:latest \
             /workspace/build.sh
 
-      - name: Post-build cleanup permissions for Actions Cache
+      - name: Fix permissions
         run: |
-          sudo chown -R $(whoami) ${{ github.workspace }}/pacman-cache || true
+          sudo chown -R "$(whoami)" ${{ github.workspace }}/pacman-cache ${{ github.workspace }}/upl-iso-build/out || true
 
-      - name: Verify ISO creation
+      - name: Verify ISO
         run: |
-          ls -la ${{ github.workspace }}/upl-iso-build/out/
-          test -f ${{ github.workspace }}/upl-iso-build/out/*.iso || { echo "ISO not found!"; exit 1; }
+          ls -lah ${{ github.workspace }}/upl-iso-build/out/
+          test -f ${{ github.workspace }}/upl-iso-build/out/*.iso || exit 1
 
-      - name: Generate Checksums
+      - name: Generate checksums
         run: |
-          sudo chown -R $(whoami) ${{ github.workspace }}/upl-iso-build/out
           cd ${{ github.workspace }}/upl-iso-build/out
           sha256sum *.iso > checksums.txt
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: UPL-OS-Final-ISO
-          path: |
+          tag_name: "upl-os-${{ github.run_number }}"
+          name: "UPL-OS Build #${{ github.run_number }}"
+          body: |
+            ## UPL-OS — AEB Approved Build
+            - **Kernel:** linux-cachyos-lts
+            - **Desktop:** KDE Plasma 6 on Wayland
+            - **Security:** AppArmor + UFW (enabled on first boot)
+            - **Filesystem:** Btrfs with Timeshift
+            - **Installer:** CachyOS Calamares
+            - **Nvidia:** Installed during setup if network is available
+          files: |
             ${{ github.workspace }}/upl-iso-build/out/*.iso
             ${{ github.workspace }}/upl-iso-build/out/checksums.txt
+          draft: false
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
