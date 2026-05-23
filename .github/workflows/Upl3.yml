@@ -83,22 +83,84 @@ jobs:
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # 5. قائمة الحزم (بدون nvidia-dkms؛ تُثبَّت لاحقاً عند الحاجة)
+          # 5. قائمة الحزم (كل حزمة في سطر منفصل)
           cat >> packages.x86_64 <<'PKGLIST'
-          cachyos-keyring cachyos-mirrorlist cachyos-settings cachyos-hooks
-          cachy-chroot pciutils kdesu base-devel intel-ucode amd-ucode grub
-          efibootmgr os-prober mtools dosfstools cryptsetup linux-cachyos-lts
-          linux-cachyos-lts-headers linux-firmware sof-firmware alsa-firmware
-          alsa-ucm-conf plasma-desktop sddm plasma-nm plasma-systemmonitor
-          konsole dolphin okular gwenview spectacle kate flatpak xdg-desktop-portal
-          xdg-desktop-portal-kde zram-generator ananicy-cpp power-profiles-daemon
-          apparmor ufw btrfs-progs timeshift grub-btrfs inotify-tools pipewire
-          pipewire-pulse pipewire-alsa pipewire-jack wireplumber pavucontrol-qt
-          gst-plugin-pipewire networkmanager network-manager-applet mesa
-          vulkan-intel vulkan-radeon intel-media-driver libva-intel-driver
-          libva-mesa-driver htop fastfetch git curl wget reflector sudo ntfs-3g
-          exfatprogs f2fs-tools cachyos-calamares noto-fonts ttf-dejavu
-          ttf-liberation papirus-icon-theme breeze-icons firefox
+          cachyos-keyring
+          cachyos-mirrorlist
+          cachyos-settings
+          cachyos-hooks
+          cachy-chroot
+          pciutils
+          kdesu
+          base-devel
+          intel-ucode
+          amd-ucode
+          grub
+          efibootmgr
+          os-prober
+          mtools
+          dosfstools
+          cryptsetup
+          linux-cachyos-lts
+          linux-cachyos-lts-headers
+          linux-firmware
+          sof-firmware
+          alsa-firmware
+          alsa-ucm-conf
+          plasma-desktop
+          sddm
+          plasma-nm
+          plasma-systemmonitor
+          konsole
+          dolphin
+          okular
+          gwenview
+          spectacle
+          kate
+          flatpak
+          xdg-desktop-portal
+          xdg-desktop-portal-kde
+          zram-generator
+          ananicy-cpp
+          power-profiles-daemon
+          apparmor
+          ufw
+          btrfs-progs
+          timeshift
+          grub-btrfs
+          inotify-tools
+          pipewire
+          pipewire-pulse
+          pipewire-alsa
+          pipewire-jack
+          wireplumber
+          pavucontrol-qt
+          gst-plugin-pipewire
+          networkmanager
+          network-manager-applet
+          mesa
+          vulkan-intel
+          vulkan-radeon
+          intel-media-driver
+          libva-intel-driver
+          libva-mesa-driver
+          htop
+          fastfetch
+          git
+          curl
+          wget
+          reflector
+          sudo
+          ntfs-3g
+          exfatprogs
+          f2fs-tools
+          cachyos-calamares
+          noto-fonts
+          ttf-dejavu
+          ttf-liberation
+          papirus-icon-theme
+          breeze-icons
+          firefox
           PKGLIST
 
           # 6. النظام التعريفي: sysusers.d فقط
@@ -120,23 +182,36 @@ jobs:
           });
           POLKIT
 
-          # 7. تحسينات النظام
+          # 7. تحسينات النظام (كل إعداد في سطر منفصل)
           mkdir -p airootfs/etc/sysctl.d
           cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'SYSCTL'
-          vm.swappiness=80 vm.vfs_cache_pressure=50 vm.dirty_ratio=10
-          vm.dirty_background_ratio=5 vm.dirty_expire_centisecs=3000
-          vm.dirty_writeback_centisecs=500 vm.page-cluster=0 vm.min_free_kbytes=65536
-          kernel.kptr_restrict=2 kernel.unprivileged_bpf_disabled=1
-          kernel.yama.ptrace_scope=1 kernel.randomize_va_space=2 kernel.nmi_watchdog=0
-          net.core.bpf_jit_harden=2 fs.file-max=2097152 net.core.default_qdisc=cake
-          net.ipv4.tcp_congestion_control=bbr net.ipv4.tcp_fastopen=3
-          net.ipv4.tcp_syncookies=1 net.ipv4.conf.all.rp_filter=1
+          vm.swappiness=80
+          vm.vfs_cache_pressure=50
+          vm.dirty_ratio=10
+          vm.dirty_background_ratio=5
+          vm.dirty_expire_centisecs=3000
+          vm.dirty_writeback_centisecs=500
+          vm.page-cluster=0
+          vm.min_free_kbytes=65536
+          kernel.kptr_restrict=2
+          kernel.unprivileged_bpf_disabled=1
+          kernel.yama.ptrace_scope=1
+          kernel.randomize_va_space=2
+          kernel.nmi_watchdog=0
+          net.core.bpf_jit_harden=2
+          fs.file-max=2097152
+          net.core.default_qdisc=cake
+          net.ipv4.tcp_congestion_control=bbr
+          net.ipv4.tcp_fastopen=3
+          net.ipv4.tcp_syncookies=1
+          net.ipv4.conf.all.rp_filter=1
           net.ipv4.conf.default.rp_filter=1
           SYSCTL
 
           mkdir -p airootfs/etc/modprobe.d
           cat > airootfs/etc/modprobe.d/nvidia-power.conf <<'NVPOWER'
-          options nvidia NVreg_DynamicPowerManagement=0x02 NVreg_UsePageAttributeTable=1
+          options nvidia NVreg_DynamicPowerManagement=0x02
+          options nvidia NVreg_UsePageAttributeTable=1
           NVPOWER
 
           mkdir -p airootfs/etc/modules-load.d && echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
@@ -166,12 +241,16 @@ jobs:
 
           mkdir -p airootfs/etc/systemd/journald.conf.d
           cat > airootfs/etc/systemd/journald.conf.d/limit-size.conf <<'JEOF'
-          [Journal] SystemMaxUse=50M RuntimeMaxUse=50M
+          [Journal]
+          SystemMaxUse=50M
+          RuntimeMaxUse=50M
           JEOF
 
           mkdir -p airootfs/etc/systemd/system.conf.d
           cat > airootfs/etc/systemd/system.conf.d/startup-timeout.conf <<'SEOF'
-          [Manager] DefaultTimeoutStartSec=10s DefaultTimeoutStopSec=10s
+          [Manager]
+          DefaultTimeoutStartSec=10s
+          DefaultTimeoutStopSec=10s
           SEOF
 
           # 8. SDDM (autologin للجلسة الحية فقط)
@@ -180,8 +259,10 @@ jobs:
           [Autologin]
           User=arch
           Session=plasma
-          [General] DisplayServer=wayland
-          [Theme] Current=breeze
+          [General]
+          DisplayServer=wayland
+          [Theme]
+          Current=breeze
           SDDMLIVE
 
           enable_service() {
@@ -202,7 +283,10 @@ jobs:
           mkdir -p airootfs/etc/skel
           cat > airootfs/etc/skel/.bashrc <<'BASHRC'
           [[ $- != *i* ]] && return
-          PS1='[\u@\h \W]\$ '; alias ls='ls --color=auto' ll='ls -lah'; export EDITOR=nano
+          PS1='[\u@\h \W]\$ '
+          alias ls='ls --color=auto'
+          alias ll='ls -lah'
+          export EDITOR=nano
           BASHRC
           echo '[[ -f ~/.bashrc ]] && . ~/.bashrc' > airootfs/etc/skel/.bash_profile
 
