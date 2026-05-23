@@ -354,7 +354,6 @@ jobs:
           # 12. customize_airootfs.sh (لتجنب تعارض Calamares)
           cat > "$PROFILE_DIR/customize_airootfs.sh" <<'CUSTOMIZE'
           #!/bin/bash
-          # يكتب shellprocess.conf بعد تثبيت الحزمة بأمان
           cat > /etc/calamares/modules/shellprocess.conf <<'CALEOF'
           dontChroot: false
           timeout: 600
@@ -427,22 +426,11 @@ jobs:
           cd ${{ github.workspace }}/upl-iso-build/out
           sha256sum *.iso > checksums.txt
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload ISO as Artifact (لا يوجد حد 2GB)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: "upl-os-${{ github.run_number }}"
-          name: "UPL-OS Build #${{ github.run_number }}"
-          body: |
-            ## UPL-OS — AEB Approved Build
-            - **Kernel:** linux-cachyos-lts
-            - **Desktop:** KDE Plasma 6 on Wayland
-            - **Security:** AppArmor + UFW (enabled on first boot)
-            - **Filesystem:** Btrfs with Timeshift
-            - **Installer:** CachyOS Calamares
-            - **Nvidia:** Installed during setup if network is available
-          files: |
+          name: UPL-OS-0.2.1
+          path: |
             ${{ github.workspace }}/upl-iso-build/out/*.iso
             ${{ github.workspace }}/upl-iso-build/out/checksums.txt
-          draft: false
-          prerelease: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          retention-days: 7
