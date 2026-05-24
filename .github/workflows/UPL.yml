@@ -1,4 +1,4 @@
-name: UPL-OS 0.2.2.0
+name: UPL-OS 0.2.5
 
 on:
   workflow_dispatch:
@@ -17,6 +17,7 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           sudo docker system prune -af || true
+          df -h
 
       - name: Cache pacman packages
         uses: actions/cache@v4
@@ -63,7 +64,7 @@ jobs:
           done
 
           # 4. pacman.conf للبناء
-          cat > pacman.conf <<'EOF'
+          cat > pacman.conf <<'BUILDPAC'
           [options]
           HoldPkg      = pacman glibc
           Architecture = x86_64
@@ -78,12 +79,12 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           [multilib]
           Include = /etc/pacman.d/mirrorlist
-          EOF
+          BUILDPAC
 
           mkdir -p airootfs/etc/pacman.d
           echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
 
-          # 5. قائمة الحزم (كل حزمة في سطر منفصل)
+          # 5. قائمة الحزم
           cat >> packages.x86_64 <<'PKGLIST'
           cachyos-keyring
           cachyos-mirrorlist
@@ -95,6 +96,7 @@ jobs:
           base-devel
           intel-ucode
           amd-ucode
+          dkms
           grub
           efibootmgr
           os-prober
@@ -163,18 +165,7 @@ jobs:
           firefox
           PKGLIST
 
-          # 6. sysusers.d مع المجموعات الصحيحة
-          mkdir -p airootfs/etc/sysusers.d
-          cat > airootfs/etc/sysusers.d/arch.conf <<'SYSUSERSCONF'
-          u arch 1000 "Live Session User" /home/arch /bin/bash
-          m arch wheel
-          m arch audio
-          m arch video
-          m arch network
-          m arch storage
-          m arch autologin
-          SYSUSERSCONF
-
+          # 6. Sudo و Polkit
           mkdir -p airootfs/etc/sudoers.d
           echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/wheel-nopasswd
           chmod 440 airootfs/etc/sudoers.d/wheel-nopasswd
@@ -190,7 +181,7 @@ jobs:
           });
           POLKIT
 
-          # 7. تحسينات النظام (كل إعداد في سطر منفصل)
+          # 7. تحسينات النظام
           mkdir -p airootfs/etc/sysctl.d
           cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'SYSCTL'
           vm.swappiness=80
@@ -312,17 +303,158 @@ jobs:
           NoDisplay=false
           CALADESKTOP
 
-          # 11. shellprocess.conf للـ Calamares
-          mkdir -p airootfs/etc/calamares/modules
-          cat > airootfs/etc/calamares/modules/shellprocess.conf <<'CALSHELL'
+          # 11. Postinstall — كامل مع الحماية الأمنية
+          mkdir -p airootfs/usr/local/bin
+          cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POSTINSTALL'
+          #!/bin/bash
+          set -euo pipefail
+
+          cp /usr/local/share/upl/pacman.conf /etc/pacman.conf
+
+          pacman-key --init 2>/dev/null || true
+          pacman-key --populate archlinux cachyos 2>/dev/null || true
+
+          rm -f /etc/sddm.conf.d/autologin.conf
+          printf '[Theme]\nCurrent=breeze\n[General]\nDisplayServer=wayland\n' > /etc/sddm.conf.d/kde_settings.conf
+
+          systemctl enable apparmor ufw power-profiles-daemon 2>/dev/null || true
+          aa-enforce /etc/apparmor.d/* 2>/dev/null || true
+
+          ufw --force reset 2>/dev/null || true
+          ufw default deny incoming 2>/dev/null || true
+          ufw default allow outgoing 2>/dev/null || true
+          ufw limit 22/tcp 2>/dev/null || true
+          ufw --force enable 2>/dev/null || true
+
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
+
+          if lspci | grep -qi nvidia; then
+              if ping -c 1 -W 3 1.1.1.1 &>/dev/null; then
+                  pacman -Sy --noconfirm --needed dkms nvidia-dkms nvidia-utils lib32-nvidia-utils || {
+                      echo "[!] فشل تثبيت حزم Nvidia. سيتم التخطي."
+                  }
+                  mkdir -p /etc/mkinitcpio.conf.d
+                  cat > /etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
+          MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+          NVIDIACONF
+                  mkinitcpio -P 2>/dev/null || true
+              else
+                  echo "[!] لا يوجد اتصال بالإنترنت. تم تخطي إعداد Nvidia."
+                  echo "[!] يمكن تثبيت التعريفات يدوياً بعد الإقلاع الأول."
+              fi
+          fi
+
+          if [ -f /etc/default/grub ]; then
+              grep -q "nowatchdog" /etc/default/grub || \
+                  sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="\)/\1nowatchdog lsm=landlock,lockdown,yama,apparmor,bpf /' /etc/default/grub
+              grep -q "GRUB_DISABLE_OS_PROBER=false" /etc/default/grub || \
+                  echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
+              grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
+          fi
+
+          if command -v timeshift &>/dev/null && [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
+              timeshift --create --comments "لقطة أولية" --tags D 2>/dev/null || true
+          fi
+
+          echo "[✔] اكتمل الإعداد اللاحق للتثبيت"
+          POSTINSTALL
+          chmod +x airootfs/usr/local/bin/upl-postinstall.sh
+
+          # 12. customize_airootfs.sh — التموضع الصحيح إجبارياً في مسار البناء لـ mkarchiso القياسي
+          mkdir -p airootfs/root
+          cat > airootfs/root/customize_airootfs.sh <<'CUSTOMIZE'
+          #!/bin/bash
+          set -euo pipefail
+          
+          # 1. إنشاء المستخدم والمجلد الأساسي بأمان
+          for grp in wheel audio video network storage autologin; do
+              groupadd -f "$grp"
+          done
+          id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage,autologin -s /bin/bash arch
+          echo "arch:arch" | chpasswd
+          cp -r /etc/skel/. /home/arch/ 2>/dev/null || true
+          chown -R arch:arch /home/arch
+          chmod 750 /home/arch
+          
+          # 2. حقن إعدادات Calamares بعد تثبيت الحزمة (يتجاوز خطأ Pacman)
+          mkdir -p /etc/calamares/modules
+          
+          cat > /etc/calamares/modules/shellprocess.conf <<'CALSHELL'
           dontChroot: false
           timeout: 600
           script:
               - "/usr/local/bin/upl-postinstall.sh"
           CALSHELL
-
-          # 12. settings.conf لضمان تنفيذ shellprocess
-          cat > airootfs/etc/calamares/settings.conf <<'CALSET'
+          
+          cat > /etc/calamares/modules/unpackfs.conf <<'CALUNPACK'
+          unpack:
+              - source: "/run/archiso/bootmnt/arch/x86_64/airootfs.sfs"
+                sourceType: "squashfs"
+                destination: ""
+          CALUNPACK
+          
+          cat > /etc/calamares/modules/bootloader.conf <<'CALBOOT'
+          efiBootLoader: "grub"
+          grubInstall: "grub-install"
+          grubMkconfig: "grub-mkconfig"
+          grubCfg: "/boot/grub/grub.cfg"
+          grubProbe: "grub-probe"
+          efiDirectory: "/boot/efi"
+          CALBOOT
+          
+          cat > /etc/calamares/modules/mount.conf <<'CALMOUNT'
+          btrfsSubvolumes:
+              - mountPoint: /
+                subvolName: /@
+              - mountPoint: /home
+                subvolName: /@home
+              - mountPoint: /var/cache
+                subvolName: /@cache
+              - mountPoint: /var/log
+                subvolName: /@log
+          efiMountPoint: /boot/efi
+          CALMOUNT
+          
+          cat > /etc/calamares/modules/partition.conf <<'CALPART'
+          defaultFileSystemType: "btrfs"
+          availableFileSystemTypes: ["ext4","btrfs","xfs","f2fs","swap"]
+          enableLuksAutomatedPartitioning: true
+          allowManualPartitioning: true
+          initialPartitioningChoice: "erase"
+          efi:
+              mountPoint: "/boot/efi"
+              recommendedSize: 512MiB
+              minimumSize: 256MiB
+          CALPART
+          
+          cat > /etc/calamares/modules/users.conf <<'CALUSERS'
+          defaultGroups:
+              - name: wheel
+                must_exist: false
+                state: true
+              - name: audio
+                must_exist: false
+                state: true
+              - name: video
+                must_exist: false
+                state: true
+              - name: storage
+                must_exist: false
+                state: true
+          autologinGroup: autologin
+          doAutologin: false
+          sudoersGroup: wheel
+          setRootPassword: false
+          doReusePassword: false
+          passwordRequirements:
+              minLength: 6
+          CALUSERS
+          
+          cat > /etc/calamares/modules/networkcfg.conf <<'CALNET'
+          backend: networkmanager
+          CALNET
+          
+          cat > /etc/calamares/settings.conf <<'CALSET'
           modules-search: [ local, /usr/lib/calamares/modules ]
           sequence:
           - show:
@@ -355,77 +487,13 @@ jobs:
           disable-cancel: false
           quit-at-end: false
           CALSET
-
-          # 13. Postinstall — مع AppArmor enforce و ufw قواعد و pacman-key قبل NVIDIA
-          mkdir -p airootfs/usr/local/bin
-          cat > airootfs/usr/local/bin/upl-postinstall.sh <<'POSTINSTALL'
-          #!/bin/bash
-          set -euo pipefail
-
-          cp /usr/local/share/upl/pacman.conf /etc/pacman.conf
-          rm -f /etc/sddm.conf.d/autologin.conf
-          printf '[Theme]\nCurrent=breeze\n[General]\nDisplayServer=wayland\n' > /etc/sddm.conf.d/kde_settings.conf
-
-          systemctl enable apparmor ufw power-profiles-daemon 2>/dev/null || true
-          aa-enforce /etc/apparmor.d/* 2>/dev/null || true
-
-          ufw --force reset 2>/dev/null || true
-          ufw default deny incoming
-          ufw default allow outgoing
-          ufw limit 22/tcp
-          ufw --force enable
-
-          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
-
-          if lspci | grep -qi nvidia; then
-              if ping -c 1 -W 3 1.1.1.1 &>/dev/null; then
-                  pacman-key --init 2>/dev/null || true
-                  pacman-key --populate archlinux cachyos 2>/dev/null || true
-                  pacman -Syu --noconfirm 2>/dev/null || true
-                  pacman -S --noconfirm --needed dkms nvidia-dkms nvidia-utils lib32-nvidia-utils || {
-                      echo "[!] فشل تثبيت حزم Nvidia. سيتم التخطي."
-                  }
-                  mkdir -p /etc/mkinitcpio.conf.d
-                  cat > /etc/mkinitcpio.conf.d/nvidia.conf <<'NVIDIACONF'
-          MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
-          NVIDIACONF
-                  mkinitcpio -P 2>/dev/null || true
-              else
-                  echo "[!] لا يوجد اتصال بالإنترنت. تم تخطي إعداد Nvidia."
-                  echo "[!] يمكن تثبيت التعريفات يدوياً بعد الإقلاع الأول."
-              fi
-          fi
-
-          if [ -f /etc/default/grub ]; then
-              grep -q "nowatchdog" /etc/default/grub || \
-                  sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="\)/\1nowatchdog lsm=landlock,lockdown,yama,apparmor,bpf /' /etc/default/grub
-              grep -q "GRUB_DISABLE_OS_PROBER=false" /etc/default/grub || \
-                  echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
-              grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-          fi
-
-          if command -v timeshift &>/dev/null && [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
-              timeshift --create --comments "لقطة أولية" --tags D 2>/dev/null || true
-          fi
-
-          echo "[✔] اكتمل الإعداد اللاحق للتثبيت"
-          POSTINSTALL
-          chmod +x airootfs/usr/local/bin/upl-postinstall.sh
-
-          # 14. customize_airootfs.sh — ينشئ المستخدم والمجلد الرئيسي
-          cat > "$PROFILE_DIR/customize_airootfs.sh" <<'CUSTOMIZE'
-          #!/bin/bash
-          # إنشاء المستخدم يدوياً (sysusers.d يعمل فقط عند الإقلاع)
-          id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage,autologin -s /bin/bash arch
-          echo "arch:arch" | chpasswd
-          # نسخ إعدادات skel
-          cp -r /etc/skel/. /home/arch/ 2>/dev/null || true
-          chown -R arch:arch /home/arch
-          chmod 750 /home/arch
           CUSTOMIZE
-          chmod +x "$PROFILE_DIR/customize_airootfs.sh"
+          
+          # ربط السكربت بمسار التنفيذ التلقائي لـ mkarchiso
+          mv airootfs/root/customize_airootfs.sh ./customize_airootfs.sh
+          chmod +x ./customize_airootfs.sh
 
-          # 15. pacman.conf للنظام المثبت
+          # 13. pacman.conf للنظام المثبت
           mkdir -p airootfs/usr/local/share/upl
           cat > airootfs/usr/local/share/upl/pacman.conf <<'INSTPAC'
           [options]
@@ -443,14 +511,14 @@ jobs:
           Include = /etc/pacman.d/mirrorlist
           INSTPAC
 
-          # 16. ضغط SquashFS
+          # 14. ضغط SquashFS
           if grep -q "^squashfs_options=" profiledef.sh; then
               sed -i 's|^squashfs_options=.*|squashfs_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
           else
               echo 'squashfs_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
           fi
 
-          # 17. بناء ISO
+          # 15. بناء ISO
           echo "[*] بدء mkarchiso..."
           mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
           echo "[*] انتهى البناء ✅"
@@ -491,7 +559,7 @@ jobs:
       - name: Upload ISO as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UPL-OS-0.2.2
+          name: UPL-OS-0.2.5
           path: |
             ${{ github.workspace }}/upl-iso-build/out/*.iso
             ${{ github.workspace }}/upl-iso-build/out/checksums.txt
