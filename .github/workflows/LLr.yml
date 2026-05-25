@@ -131,10 +131,7 @@ jobs:
           echo '  <desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '    <number>2</number>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '  </desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          
-          # تأمين نهاية ملف rc.xml لتجنب أي أخطاء تفسير
           echo '</openbox_config>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          
           echo '#!/bin/sh' > config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now ModemManager.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now bluetooth.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
@@ -168,22 +165,19 @@ jobs:
           name: "${{ env.DISTRO_FULLNAME }} ${{ steps.ver.outputs.version }}"
           tag_name: ${{ github.ref_name }}
           body: |
-            ## ${{ env.DISTRO_FULLNAME }} v${{ steps.ver.outputs.version }}
-
-            نظام حي خفيف جداً بالعربية.
-            - سطح مكتب LXDE
-            - استهلاك منخفض جداً للذاكرة
-            - دعم كامل للغة العربية
-            - بدون برامج ثقيلة (يمكن تثبيتها بسهولة)
-
-            ### النسخ على USB
-```bash
-            sudo dd if=${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso of=/dev/sdX bs=4M status=progress conv=fsync
-            ```
-files: |
-output/*.iso
-output/*.sha256
-draft: false
-prerelease: false
-env:
-GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ## ${{ env.DISTRO_FULLNAME }}
+            نظام حي خفيف جداً يدعم اللغة العربية بشكل كامل.
+            
+            - واجهة خفيفة (LXDE) واستهلاك منخفض جداً للموارد.
+            - دعم كامل للكتابة والقراءة بالعربية افتراضياً.
+            
+            ### حرق النظام على فلاشة USB
+            يمكنك استخدام أدوات رسومية مثل Rufus أو BalenaEtcher، أو عبر سطر الأوامر (استبدل sdX بمسار الفلاشة الصحيح):
+            sudo dd if=filename.iso of=/dev/sdX bs=4M status=progress
+          files: |
+            output/*.iso
+            output/*.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
