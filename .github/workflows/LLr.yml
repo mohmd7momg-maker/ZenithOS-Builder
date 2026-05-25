@@ -28,10 +28,22 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost 2>/dev/null || true
           sudo apt-get clean
 
-      - name: Install Dependencies
+      - name: Install Dependencies and Fix Debian Keyring
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y live-build debian-keyring debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-pc-bin squashfs-tools
+          sudo apt-get install -y live-build debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-pc-bin squashfs-tools
+
+          # استيراد مفاتيح Debian Bookworm المفقودة/القديمة
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys \
+            F8D2585B8783D481 \
+            54404762BBB6E853 \
+            BDE6D2B9216EC7A8 \
+            0E98404D386FA1D9 \
+            6ED0E7B82643E131 \
+            A7236886F3CCCAAD148A27F80E98404D386FA1D9 || true
+
+          # تحديث قاعدة المفاتيح مرة أخيرة
+          sudo apt-get update -qq || true
 
       - name: Build System
         run: |
@@ -90,7 +102,7 @@ jobs:
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' "${{ env.BG_COLOR }}" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
 
-          # كتابة customize.sh بأمان كامل بدون heredoc
+          # كتابة customize.sh بأوامر echo خالية من heredoc
           echo '#!/bin/bash' > customize.sh
           echo 'set -e' >> customize.sh
           echo '' >> customize.sh
