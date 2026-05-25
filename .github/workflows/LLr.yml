@@ -58,18 +58,22 @@ jobs:
           restore-keys: |
             apt-cache-${{ runner.os }}-
 
-      - name: Install host tools
+      - name: Install host tools (With Debian Keyring Fix)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends live-build
+          sudo apt-get install -y --no-install-recommends live-build debian-archive-keyring
 
       - name: Build live system
         run: |
           set -e
           mkdir -p live-work && cd live-work
+          
+          # إعداد معماري متكامل لبيئة دبيان الحية
           lb config noauto \
+            --mode "debian" \
             --distribution "bookworm" \
-            --archive-areas "main contrib non-free" \
+            --mirror-bootstrap "http://deb.debian.org/debian/" \
+            --archive-areas "main contrib non-free non-free-firmware" \
             --debian-installer "live" \
             --bootappend-live "boot=live components quiet splash zram.enabled=1 locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }}" \
             --binary-images "iso-hybrid" \
@@ -81,10 +85,14 @@ jobs:
           
           export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
           
-          # [تصحيح] تأمين إنشاء مجلد قوائم الحزم منعاً للانهيار
           mkdir -p config/package-lists
           
+          # [تصحيح] إضافة حزم الإقلاع والـ kernel الأساسية لضمان عمل الـ ISO بشكل سليم
           {
+            echo "linux-image-amd64"
+            echo "live-boot"
+            echo "live-config"
+            echo "live-config-systemd"
             echo "task-lxde-desktop"
             echo "network-manager"
             echo "network-manager-gnome"
@@ -101,7 +109,7 @@ jobs:
             echo "gvfs"
           } > config/package-lists/base.list.chroot
 
-          # [تصحيح] تهيئة شجرة المجلدات بالكامل وبشكل عميق للتأكد من وجود مسارات xdg و openbox
+          # تهيئة المجلدات الهيكلية للنظام
           mkdir -p config/includes.chroot/etc/default
           mkdir -p config/includes.chroot/etc/xdg/lxsession/LXDE
           mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
@@ -154,7 +162,7 @@ jobs:
           </openbox_config>
           EOF
 
-          # تأمين إنشاء مجلد الـ hooks
+          # بناء مجلد الـ hooks وضبط الأذونات القياسية للـ Chroot
           mkdir -p config/hooks/normal
           
           {
@@ -164,9 +172,13 @@ jobs:
             echo 'systemctl disable --now cups.service 2>/dev/null || true'
             echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true'
           } > config/hooks/normal/0500-disable-services.hook.chroot
-          chmod +x config/hooks/normal/0500-disable-services.hook.chroot
           
-          sudo lb build
+          # [تصحيح] منح صلاحيات الوصول الكاملة لـ root قبل تشغيل التجميع
+          chmod 755 config/hooks/normal/0500-disable-services.hook.chroot
+          
+          # تصفية المتغيرات البيئية المضيفة وإطلاق البناء
+          sudo env -i HOME=$HOME PATH=$PATH lb build
+          
           mkdir -p "$GITHUB_WORKSPACE/output"
           cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
 
