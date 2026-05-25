@@ -74,20 +74,19 @@ jobs:
             --memtest "none"
 
           # ---------- packages ----------
-          # Base desktop + network + essentials (NO heavy apps preinstalled)
           cat > config/package-lists/base.list.chroot << 'EOF'
-  task-lxde-desktop
-  network-manager
-  zram-tools
-  locales
-  fonts-noto
-  fonts-noto-arabic
-  xarchiver
-  zip unzip p7zip-full
-  gvfs
-  # اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
-  # firefox-esr
-  EOF
+task-lxde-desktop
+network-manager
+zram-tools
+locales
+fonts-noto
+fonts-noto-arabic
+xarchiver
+zip unzip p7zip-full
+gvfs
+# اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
+# firefox-esr
+EOF
 
           # ---------- customization folders ----------
           mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
@@ -103,54 +102,54 @@ jobs:
           echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
 
           cat > config/includes.chroot/etc/default/keyboard << 'KBD'
-  XKBMODEL="pc105"
-  XKBLAYOUT="ara,us"
-  XKBVARIANT=""
-  XKBOPTIONS="grp:alt_shift_toggle"
-  BACKSPACE="guess"
-  KBD
+XKBMODEL="pc105"
+XKBLAYOUT="ara,us"
+XKBVARIANT=""
+XKBOPTIONS="grp:alt_shift_toggle"
+BACKSPACE="guess"
+KBD
 
           # ---------- desktop appearance ----------
           cat > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf << 'DESK'
-  [*]
-  wallpaper_mode=stretch
-  wallpaper=/usr/share/backgrounds/wallpaper.jpg
-  desktop_bg=#2E3440
-  DESK
+[*]
+wallpaper_mode=stretch
+wallpaper=/usr/share/backgrounds/wallpaper.jpg
+desktop_bg=#2E3440
+DESK
 
           cat > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf << 'SES'
-  [Session]
-  window_manager=openbox
-  disable_autostart=no
+[Session]
+window_manager=openbox
+disable_autostart=no
 
-  [GTK]
-  sGtk/ThemeName=Arc
-  sGtk/IconThemeName=Papirus
-  sGtk/FontName=Noto Sans Arabic 11
-  SES
+[GTK]
+sGtk/ThemeName=Arc
+sGtk/IconThemeName=Papirus
+sGtk/FontName=Noto Sans Arabic 11
+SES
 
           cat > config/includes.chroot/etc/xdg/openbox/rc.xml << 'OBXML'
-  <?xml version="1.0" encoding="UTF-8"?>
-  <openbox_config xmlns="http://openbox.org/3.4/rc">
-    <theme>
-      <name>Arc</name>
-      <titleLayout>NLIMC</titleLayout>
-      <keepBorder>yes</keepBorder>
-    </theme>
-    <desktops>
-      <number>2</number>
-    </desktops>
-  </openbox_config>
-  OBXML
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <theme>
+    <name>Arc</name>
+    <titleLayout>NLIMC</titleLayout>
+    <keepBorder>yes</keepBorder>
+  </theme>
+  <desktops>
+    <number>2</number>
+  </desktops>
+</openbox_config>
+OBXML
 
           # ---------- disable useless services ----------
           cat > config/hooks/normal/0500-disable-services.hook.chroot << 'SVC'
-  #!/bin/sh
-  systemctl disable --now ModemManager.service 2>/dev/null || true
-  systemctl disable --now bluetooth.service 2>/dev/null || true
-  systemctl disable --now cups.service 2>/dev/null || true
-  systemctl disable --now avahi-daemon.service 2>/dev/null || true
-  SVC
+#!/bin/sh
+systemctl disable --now ModemManager.service 2>/dev/null || true
+systemctl disable --now bluetooth.service 2>/dev/null || true
+systemctl disable --now cups.service 2>/dev/null || true
+systemctl disable --now avahi-daemon.service 2>/dev/null || true
+SVC
           chmod +x config/hooks/normal/0500-disable-services.hook.chroot
 
           # ---------- build ----------
