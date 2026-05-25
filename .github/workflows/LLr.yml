@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       distro_version:
-        description: 'Version string (leave blank for YYYYMMDD)'
+        description: 'Version string'
         required: false
         default: ''
   push:
@@ -168,22 +168,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}
-          path: |
-            output/*.iso
-            output/*.sha256
-          retention-days: 30
+          name: ${{ env.DISTRO_NAME }}
+          path: output/
+          retention-days: 7
           compression-level: 0
-
-      - name: Create release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "Arabic Live ISO Build"
-          tag_name: ${{ github.ref_name }}
-          body: "Automated lightweight Arabic GNU/Linux live image distribution built successfully via GitHub Actions."
-          files: |
-            output/*.iso
-            output/*.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
