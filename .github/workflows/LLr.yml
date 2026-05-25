@@ -1,0 +1,96 @@
+name: Build LiteLive Arabic ISO
+
+on:
+  push:
+    tags: ['v*.*']
+  workflow_dispatch:
+    inputs:
+      distro_version:
+        description: 'Version string (leave blank for YYYYMMDD)'
+        required: false
+        default: ''
+
+env:
+  DISTRO_NAME: LiteLive
+  MIRROR: http://archive.ubuntu.com/ubuntu
+  UBUNTU_SUITE: jammy
+  ARCH: amd64
+
+jobs:
+  build:
+    name: Build ISO
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.distro_version }}" ]]; then
+            VER="${{ github.event.inputs.distro_version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+            VER="${VER#v}"
+          else
+            VER="$(date +%Y%m%d)"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore host APT cache
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-host-${{ runner.os }}-${{ hashFiles('build.sh') }}
+          restore-keys: apt-host-${{ runner.os }}-
+
+      - name: Build ISO
+        env:
+          DISTRO_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          sudo --preserve-env=DISTRO_NAME,DISTRO_VERSION,MIRROR,UBUNTU_SUITE,ARCH bash build.sh
+
+      - name: Show output
+        run: ls -lh output/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lite-live-ar-${{ steps.ver.outputs.version }}
+          path: |
+            output/*.iso
+            output/*.sha256
+          retention-days: 30
+
+      - name: Create GitHub Release (tags only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "LiteLive Arabic ${{ steps.ver.outputs.version }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## LiteLive Arabic Edition ${{ steps.ver.outputs.version }}
+
+            A lightweight Ubuntu 22.04-based live ISO with **Arabic Xfce 4.16** desktop.
+            Large apps (Firefox, VLC, Evince) are intentionally excluded to keep the ISO small.
+            Users can install them on demand with `sudo apt install`.
+
+            ### Boot Options
+            - Live Session
+            - Persistent Mode (saves files to `casper-rw` partition)
+            - Run Entirely in RAM
+
+            ### Flash to USB
+            ```bash
+            sudo dd if=lite-live-ar-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
+            ```
+          files: |
+            output/*.iso
+            output/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
