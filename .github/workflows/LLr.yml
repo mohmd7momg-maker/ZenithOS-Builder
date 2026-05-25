@@ -81,6 +81,9 @@ jobs:
           
           export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
           
+          # [تصحيح] تأمين إنشاء مجلد قوائم الحزم منعاً للانهيار
+          mkdir -p config/package-lists
+          
           {
             echo "task-lxde-desktop"
             echo "network-manager"
@@ -98,7 +101,11 @@ jobs:
             echo "gvfs"
           } > config/package-lists/base.list.chroot
 
-          mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
+          # [تصحيح] تهيئة شجرة المجلدات بالكامل وبشكل عميق للتأكد من وجود مسارات xdg و openbox
+          mkdir -p config/includes.chroot/etc/default
+          mkdir -p config/includes.chroot/etc/xdg/lxsession/LXDE
+          mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
+          mkdir -p config/includes.chroot/etc/xdg/openbox
           mkdir -p config/includes.chroot/usr/share/backgrounds
           mkdir -p config/includes.chroot/etc/lightdm
           
@@ -147,6 +154,9 @@ jobs:
           </openbox_config>
           EOF
 
+          # تأمين إنشاء مجلد الـ hooks
+          mkdir -p config/hooks/normal
+          
           {
             echo '#!/bin/sh'
             echo 'systemctl disable --now ModemManager.service 2>/dev/null || true'
@@ -172,3 +182,4 @@ jobs:
           path: output/
           retention-days: 7
           compression-level: 0
+
