@@ -1,4 +1,4 @@
-name: Build Lightweight Arabic Live ISO
+Name: Build Lightweight Arabic Live ISO
 
 on:
   workflow_dispatch:
@@ -22,7 +22,8 @@ env:
   ICON_THEME: "Papirus"
   FONT_NAME: "Noto Sans Arabic"
   FONT_SIZE: "11"
-  WALLPAPER_URL: "https://source.unsplash.com/featured/1920x1080/?nature,calm"
+  # تم استبدال رابط Unsplash المعطل برابط صورة ثابتة وموثوقة
+  WALLPAPER_URL: "https://raw.githubusercontent.com/GNOME/backgrounds/main/backgrounds/adwaita-d.jpg"
   BG_COLOR: "#2E3440"
 
 jobs:
@@ -55,7 +56,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: apt-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/LLr.yml') }}
+          key: apt-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
           restore-keys: |
             apt-cache-${{ runner.os }}-
 
@@ -68,8 +69,6 @@ jobs:
         run: |
           set -e
           mkdir -p live-work && cd live-work
-
-          # ---------- lb config ----------
           lb config noauto \
             --distribution "bookworm" \
             --archive-areas "main contrib non-free" \
@@ -79,11 +78,21 @@ jobs:
             --iso-application "${{ env.DISTRO_FULLNAME }}" \
             --iso-volume "${{ env.DISTRO_NAME }} ${{ steps.ver.outputs.version }}" \
             --linux-flavours "amd64" \
-            --memtest "none"
-
-          # ---------- packages ----------
+            --memtest "none" \
+            --chroot-filesystem squashfs
+          
+          # فرض ضغط xz بأقصى قدرة لتقليل حجم الـ ISO النهائي
+          export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
+          
           echo "task-lxde-desktop" > config/package-lists/base.list.chroot
           echo "network-manager" >> config/package-lists/base.list.chroot
+          
+          # --- إضافة الحزم الناقصة للواجهة والشبكة ---
+          echo "network-manager-gnome" >> config/package-lists/base.list.chroot
+          echo "arc-theme" >> config/package-lists/base.list.chroot
+          echo "papirus-icon-theme" >> config/package-lists/base.list.chroot
+          # -------------------------------------------
+          
           echo "zram-tools" >> config/package-lists/base.list.chroot
           echo "locales" >> config/package-lists/base.list.chroot
           echo "fonts-noto" >> config/package-lists/base.list.chroot
@@ -93,35 +102,22 @@ jobs:
           echo "unzip" >> config/package-lists/base.list.chroot
           echo "p7zip-full" >> config/package-lists/base.list.chroot
           echo "gvfs" >> config/package-lists/base.list.chroot
-          # اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
-          # echo "firefox-esr" >> config/package-lists/base.list.chroot
-
-          # ---------- customization folders ----------
           mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
           mkdir -p config/includes.chroot/usr/share/backgrounds
           mkdir -p config/includes.chroot/etc/lightdm
-
-          # ---------- wallpaper ----------
           echo "Downloading wallpaper..."
           wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
-
-          # ---------- locale ----------
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
-
-          # ---------- keyboard ----------
           echo 'XKBMODEL="pc105"' > config/includes.chroot/etc/default/keyboard
           echo 'XKBLAYOUT="ara,us"' >> config/includes.chroot/etc/default/keyboard
           echo 'XKBVARIANT=""' >> config/includes.chroot/etc/default/keyboard
           echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> config/includes.chroot/etc/default/keyboard
           echo 'BACKSPACE="guess"' >> config/includes.chroot/etc/default/keyboard
-
-          # ---------- desktop appearance ----------
           echo "[*]" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
           echo "wallpaper_mode=stretch" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
           echo "wallpaper=/usr/share/backgrounds/wallpaper.jpg" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
           echo "desktop_bg=${{ env.BG_COLOR }}" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-
           echo "[Session]" > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
           echo "window_manager=openbox" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
           echo "disable_autostart=no" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
@@ -130,7 +126,6 @@ jobs:
           echo "sGtk/ThemeName=${{ env.THEME_NAME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
           echo "sGtk/IconThemeName=${{ env.ICON_THEME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
           echo "sGtk/FontName=${{ env.FONT_NAME }} ${{ env.FONT_SIZE }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-
           echo '<?xml version="1.0" encoding="UTF-8"?>' > config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '<openbox_config xmlns="http://openbox.org/3.4/rc">' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '  <theme>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
@@ -142,19 +137,13 @@ jobs:
           echo '    <number>2</number>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '  </desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '</openbox_config>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-
-          # ---------- disable useless services ----------
           echo '#!/bin/sh' > config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now ModemManager.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now bluetooth.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now cups.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           chmod +x config/hooks/normal/0500-disable-services.hook.chroot
-
-          # ---------- build ----------
           sudo lb build
-
-          # ---------- collect ISO ----------
           mkdir -p "$GITHUB_WORKSPACE/output"
           cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
 
@@ -190,13 +179,13 @@ jobs:
             - بدون برامج ثقيلة (يمكن تثبيتها بسهولة)
 
             ### النسخ على USB
-            ```bash
+```bash
             sudo dd if=${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso of=/dev/sdX bs=4M status=progress conv=fsync
             ```
-          files: |
-            output/*.iso
-            output/*.sha256
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+files: |
+output/*.iso
+output/*.sha256
+draft: false
+prerelease: false
+env:
+GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
