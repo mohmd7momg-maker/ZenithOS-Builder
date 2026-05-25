@@ -47,12 +47,12 @@ jobs:
             --mode "debian" \
             --distribution "bookworm" \
             --architectures "amd64" \
-            --linux-flavours "amd64" \
-            --mirror-bootstrap "http://deb.debian.org/debian/" \
-            --mirror-chroot "http://deb.debian.org/debian/" \
-            --mirror-binary "http://deb.debian.org/debian/" \
-            --mirror-chroot-security "http://deb.debian.org/debian-security/" \
-            --mirror-binary-security "http://deb.debian.org/debian-security/" \
+            --linux-packages "linux-image-amd64" \
+            --mirror-bootstrap "http://deb.debian.org/debian" \
+            --mirror-chroot "http://deb.debian.org/debian" \
+            --mirror-binary "http://deb.debian.org/debian" \
+            --mirror-chroot-security "http://deb.debian.org/debian-security" \
+            --mirror-binary-security "http://deb.debian.org/debian-security" \
             --security false \
             --apt-recommends true \
             --archive-areas "main contrib non-free non-free-firmware" \
@@ -65,10 +65,7 @@ jobs:
 
           mkdir -p config/package-lists config/archives config/includes.chroot/etc/default config/includes.chroot/usr/share/backgrounds config/includes.chroot/etc/xdg/pcmanfm/LXDE config/hooks/normal
 
-          # إضافة مستودع الأمان Bookworm-security بالمسار الصحيح
           echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" > config/archives/security.list.chroot
-
-          # إضافة مستودع التحديثات Bookworm-updates
           echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" > config/archives/updates.list.chroot
 
           {
@@ -101,29 +98,22 @@ jobs:
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' "${{ env.BG_COLOR }}" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
 
-          # كتابة customize.sh بأمان تام باستخدام echo فقط
           echo '#!/bin/bash' > customize.sh
           echo 'set -e' >> customize.sh
-          echo '' >> customize.sh
           echo 'echo "exit 101" > /usr/sbin/policy-rc.d' >> customize.sh
           echo 'chmod +x /usr/sbin/policy-rc.d' >> customize.sh
-          echo '' >> customize.sh
           echo 'echo "lightdm shared/default-x-display-manager select lightdm" | debconf-set-selections' >> customize.sh
-          echo '' >> customize.sh
           echo 'mkdir -p /etc/lightdm' >> customize.sh
           echo 'printf "[Seat:*]\nautologin-user=user\nautologin-user-timeout=0\nuser-session=LXDE\n" > /etc/lightdm/lightdm.conf' >> customize.sh
-          echo '' >> customize.sh
           echo 'grep -qxF "ar_SA.UTF-8 UTF-8" /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen' >> customize.sh
           echo 'grep -qxF "en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen' >> customize.sh
           echo 'locale-gen || true' >> customize.sh
-          echo '' >> customize.sh
           echo 'for service in ModemManager bluetooth cups avahi-daemon; do' >> customize.sh
           echo '    if [ -f /lib/systemd/system/"$service".service ]; then' >> customize.sh
           echo '        mkdir -p /etc/systemd/system/' >> customize.sh
           echo '        ln -sf /dev/null /etc/systemd/system/"$service".service || true' >> customize.sh
           echo '    fi' >> customize.sh
           echo 'done' >> customize.sh
-          echo '' >> customize.sh
           echo 'rm -f /usr/sbin/policy-rc.d' >> customize.sh
           echo 'apt-get clean' >> customize.sh
           echo 'rm -rf /var/cache/apt/archives/* /tmp/* /var/tmp/* /var/lib/apt/lists/*' >> customize.sh
