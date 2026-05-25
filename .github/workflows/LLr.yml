@@ -1,4 +1,4 @@
-Name: Build Lightweight Arabic Live ISO
+name: Build Lightweight Arabic Live ISO
 
 on:
   workflow_dispatch:
@@ -22,7 +22,6 @@ env:
   ICON_THEME: "Papirus"
   FONT_NAME: "Noto Sans Arabic"
   FONT_SIZE: "11"
-  # تم استبدال رابط Unsplash المعطل برابط صورة ثابتة وموثوقة
   WALLPAPER_URL: "https://raw.githubusercontent.com/GNOME/backgrounds/main/backgrounds/adwaita-d.jpg"
   BG_COLOR: "#2E3440"
 
@@ -81,17 +80,13 @@ jobs:
             --memtest "none" \
             --chroot-filesystem squashfs
           
-          # فرض ضغط xz بأقصى قدرة لتقليل حجم الـ ISO النهائي
           export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
           
           echo "task-lxde-desktop" > config/package-lists/base.list.chroot
           echo "network-manager" >> config/package-lists/base.list.chroot
-          
-          # --- إضافة الحزم الناقصة للواجهة والشبكة ---
           echo "network-manager-gnome" >> config/package-lists/base.list.chroot
           echo "arc-theme" >> config/package-lists/base.list.chroot
           echo "papirus-icon-theme" >> config/package-lists/base.list.chroot
-          # -------------------------------------------
           
           echo "zram-tools" >> config/package-lists/base.list.chroot
           echo "locales" >> config/package-lists/base.list.chroot
@@ -136,7 +131,10 @@ jobs:
           echo '  <desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '    <number>2</number>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
           echo '  </desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          
+          # تأمين نهاية ملف rc.xml لتجنب أي أخطاء تفسير
           echo '</openbox_config>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          
           echo '#!/bin/sh' > config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now ModemManager.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           echo 'systemctl disable --now bluetooth.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
