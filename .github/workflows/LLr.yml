@@ -31,105 +31,130 @@ jobs:
       - name: Install Dependencies and Update Keyring
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y live-build debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-pc-bin squashfs-tools
+          sudo apt-get install -y debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-pc-bin squashfs-tools debootstrap
           wget -q "http://ftp.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.3+deb12u2_all.deb"
           sudo dpkg -i debian-archive-keyring_2023.3+deb12u2_all.deb
           rm -f debian-archive-keyring_2023.3+deb12u2_all.deb
           sudo apt-get update -qq || true
 
-      - name: Build System
+      - name: Build Live ISO
         run: |
           set -e
-          mkdir -p live-work && cd live-work
-          sudo lb clean --purge || true
+          WORK_DIR="$GITHUB_WORKSPACE/work"
+          OUTPUT_DIR="$GITHUB_WORKSPACE/output"
+          ROOTFS="$WORK_DIR/rootfs"
+          ISODIR="$WORK_DIR/iso"
 
-          lb config noauto \
-            --mode "debian" \
-            --distribution "bookworm" \
-            --architectures "amd64" \
-            --linux-packages "linux-image-amd64" \
-            --mirror-bootstrap "http://deb.debian.org/debian" \
-            --mirror-chroot "http://deb.debian.org/debian" \
-            --mirror-binary "http://deb.debian.org/debian" \
-            --mirror-chroot-security "http://deb.debian.org/debian-security" \
-            --mirror-binary-security "http://deb.debian.org/debian-security" \
-            --security false \
-            --apt-recommends true \
-            --archive-areas "main contrib non-free non-free-firmware" \
-            --bootappend-live "boot=live components quiet splash locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }} keyboard-options=grp:alt_shift_toggle" \
-            --binary-images "iso-hybrid" \
-            --iso-application "${{ env.DISTRO_FULLNAME }}" \
-            --iso-volume "${{ env.DISTRO_NAME }}" \
-            --debian-installer "none" \
-            --chroot-filesystem squashfs
+          mkdir -p "$ROOTFS" "$ISODIR/live" "$ISODIR/boot/isolinux" "$ISODIR/boot/grub" "$ISODIR/EFI/boot" "$OUTPUT_DIR"
 
-          mkdir -p config/package-lists config/archives config/includes.chroot/etc/default config/includes.chroot/usr/share/backgrounds config/includes.chroot/etc/xdg/pcmanfm/LXDE config/hooks/normal
+          # ---------- debootstrap ----------
+          sudo debootstrap --arch=amd64 --include=ca-certificates,locales,sudo,wget,curl bookworm "$ROOTFS" http://deb.debian.org/debian/
 
-          echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" > config/archives/security.list.chroot
-          echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" > config/archives/updates.list.chroot
+          # ---------- إعداد chroot ----------
+          sudo mount --bind /dev "$ROOTFS/dev"
+          sudo mount --bind /dev/pts "$ROOTFS/dev/pts"
+          sudo mount -t proc proc "$ROOTFS/proc"
+          sudo mount -t sysfs sysfs "$ROOTFS/sys"
 
-          {
-            echo "linux-image-amd64"
-            echo "live-boot"
-            echo "live-config"
-            echo "live-config-systemd"
-            echo "user-setup"
-            echo "sudo"
-            echo "firmware-linux-free"
-            echo "ca-certificates"
-            echo "curl"
-            echo "wget"
-            echo "xserver-xorg-video-all"
-            echo "xserver-xorg-input-all"
-            echo "dbus-x11"
-            echo "task-lxde-desktop"
-            echo "lightdm"
-            echo "network-manager"
-            echo "network-manager-gnome"
-            echo "arc-theme"
-            echo "papirus-icon-theme"
-            echo "zram-tools"
-            echo "locales"
-            echo "fonts-noto-core"
-            echo "fonts-kacst"
-          } > config/package-lists/base.list.chroot
+          cat << 'CHROOTEOF' | sudo chroot "$ROOTFS" /bin/bash
+          set -e
 
-          wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
-          echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
-          printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' "${{ env.BG_COLOR }}" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+          # مستودعات
+          echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list
+          echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+          echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+          apt-get update -qq
 
-          echo '#!/bin/bash' > customize.sh
-          echo 'set -e' >> customize.sh
-          echo 'echo "exit 101" > /usr/sbin/policy-rc.d' >> customize.sh
-          echo 'chmod +x /usr/sbin/policy-rc.d' >> customize.sh
-          echo 'echo "lightdm shared/default-x-display-manager select lightdm" | debconf-set-selections' >> customize.sh
-          echo 'mkdir -p /etc/lightdm' >> customize.sh
-          echo 'printf "[Seat:*]\nautologin-user=user\nautologin-user-timeout=0\nuser-session=LXDE\n" > /etc/lightdm/lightdm.conf' >> customize.sh
-          echo 'grep -qxF "ar_SA.UTF-8 UTF-8" /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen' >> customize.sh
-          echo 'grep -qxF "en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen' >> customize.sh
-          echo 'locale-gen || true' >> customize.sh
-          echo 'for service in ModemManager bluetooth cups avahi-daemon; do' >> customize.sh
-          echo '    if [ -f /lib/systemd/system/"$service".service ]; then' >> customize.sh
-          echo '        mkdir -p /etc/systemd/system/' >> customize.sh
-          echo '        ln -sf /dev/null /etc/systemd/system/"$service".service || true' >> customize.sh
-          echo '    fi' >> customize.sh
-          echo 'done' >> customize.sh
-          echo 'rm -f /usr/sbin/policy-rc.d' >> customize.sh
-          echo 'apt-get clean' >> customize.sh
-          echo 'rm -rf /var/cache/apt/archives/* /tmp/* /var/tmp/* /var/lib/apt/lists/*' >> customize.sh
+          # تثبيت الحزم الأساسية
+          apt-get install -y --no-install-recommends \
+            linux-image-amd64 live-boot live-config live-config-systemd \
+            user-setup sudo firmware-linux-free \
+            xserver-xorg-video-all xserver-xorg-input-all dbus-x11 \
+            task-lxde-desktop lightdm network-manager network-manager-gnome \
+            arc-theme papirus-icon-theme zram-tools locales \
+            fonts-noto-core fonts-kacst
 
-          chmod +x customize.sh
-          sudo cp customize.sh config/hooks/normal/0500-customize.hook.chroot
-          sudo chmod +x config/hooks/normal/0500-customize.hook.chroot
+          # تثبيت GRUB و syslinux
+          apt-get install -y --no-install-recommends grub-pc-bin grub-efi-amd64-bin syslinux isolinux
 
-          sudo env DEBIAN_FRONTEND=noninteractive PATH="$PATH" HOME="$HOME" lb build
+          # اللغة
+          echo "ar_SA.UTF-8 UTF-8" > /etc/locale.gen
+          echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+          locale-gen
+          echo "LANG=ar_SA.UTF-8" > /etc/default/locale
 
-          if [ -f live-image-amd64.hybrid.iso ]; then
-            mkdir -p ../output
-            cp live-image-amd64.hybrid.iso ../output/${{ env.DISTRO_NAME }}.iso
-          else
-            echo "ERROR: ISO was not generated!" && exit 1
-          fi
+          # لوحة المفاتيح
+          echo 'XKBMODEL="pc105"' > /etc/default/keyboard
+          echo 'XKBLAYOUT="ara,us"' >> /etc/default/keyboard
+          echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> /etc/default/keyboard
+
+          # تسجيل الدخول التلقائي
+          mkdir -p /etc/lightdm
+          printf '[Seat:*]\nautologin-user=user\nautologin-user-timeout=0\nuser-session=LXDE\n' > /etc/lightdm/lightdm.conf
+
+          # تعطيل الخدمات غير الضرورية
+          for s in ModemManager bluetooth cups avahi-daemon; do
+            systemctl disable $s 2>/dev/null || true
+          done
+
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+          CHROOTEOF
+
+          sudo umount -lf "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys" || true
+
+          # ---------- تجهيز squashfs ----------
+          sudo mksquashfs "$ROOTFS" "$ISODIR/live/filesystem.squashfs" -comp xz -b 1M -noappend
+          printf '%s' "$(sudo du -sx --block-size=1 "$ROOTFS" | cut -f1)" > "$ISODIR/live/filesystem.size"
+
+          # ---------- النواة ----------
+          sudo cp "$ROOTFS"/boot/vmlinuz-* "$ISODIR/live/vmlinuz"
+          sudo cp "$ROOTFS"/boot/initrd.img-* "$ISODIR/live/initrd"
+
+          # ---------- إعدادات الإقلاع ----------
+          sudo cp /usr/lib/ISOLINUX/isolinux.bin "$ISODIR/boot/isolinux/"
+          sudo cp /usr/lib/syslinux/modules/bios/menu.c32 "$ISODIR/boot/isolinux/"
+          sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 "$ISODIR/boot/isolinux/"
+          sudo cp /usr/lib/syslinux/modules/bios/libutil.c32 "$ISODIR/boot/isolinux/"
+
+          cat << 'ISOCFG' | sudo tee "$ISODIR/boot/isolinux/isolinux.cfg"
+UI menu.c32
+PROMPT 0
+TIMEOUT 50
+DEFAULT live
+LABEL live
+  MENU LABEL MyLive – Live Session
+  KERNEL /live/vmlinuz
+  APPEND initrd=/live/initrd boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle
+ISOCFG
+
+          cat << 'GRUBCFG' | sudo tee "$ISODIR/boot/grub/grub.cfg"
+set timeout=5
+menuentry "MyLive – Live Session" {
+  linux /live/vmlinuz boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle
+  initrd /live/initrd
+}
+GRUBCFG
+
+          # ---------- بناء EFI ----------
+          sudo grub-mkstandalone --format=x86_64-efi --output="$ISODIR/EFI/boot/bootx64.efi" \
+            --modules="part_gpt part_msdos fat iso9660 search search_label linux linuxefi echo configfile all_video gfxterm" \
+            "boot/grub/grub.cfg=$ISODIR/boot/grub/grub.cfg"
+          sudo dd if=/dev/zero of="$ISODIR/EFI/boot/efiboot.img" bs=1M count=8
+          sudo mkfs.fat -n EFIBOOT "$ISODIR/EFI/boot/efiboot.img"
+          sudo mmd -i "$ISODIR/EFI/boot/efiboot.img" ::/EFI ::/EFI/BOOT
+          sudo mcopy -i "$ISODIR/EFI/boot/efiboot.img" "$ISODIR/EFI/boot/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+
+          # ---------- إنشاء ISO ----------
+          sudo xorriso -as mkisofs \
+            -iso-level 3 -volid "MyLive" \
+            -b boot/isolinux/isolinux.bin -c boot/isolinux/boot.cat \
+            -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot -e EFI/boot/efiboot.img -no-emul-boot \
+            -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+            -output "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso" "$ISODIR"
+
+          sudo sha256sum "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso" > "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso.sha256"
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
