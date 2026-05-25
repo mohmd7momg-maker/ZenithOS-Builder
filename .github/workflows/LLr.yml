@@ -44,99 +44,91 @@ jobs:
           OUTPUT_DIR="$GITHUB_WORKSPACE/output"
           ROOTFS="$WORK_DIR/rootfs"
           ISODIR="$WORK_DIR/iso"
-
+          
           mkdir -p "$ROOTFS" "$ISODIR/live" "$ISODIR/boot/isolinux" "$ISODIR/boot/grub" "$ISODIR/EFI/boot" "$OUTPUT_DIR"
-
+          
           # ---------- debootstrap ----------
           sudo debootstrap --arch=amd64 --include=ca-certificates,locales,sudo,wget,curl bookworm "$ROOTFS" http://deb.debian.org/debian/
-
-          # ---------- إعداد chroot ----------
+          
+          # ---------- إعداد بيئة chroot ----------
           sudo mount --bind /dev "$ROOTFS/dev"
           sudo mount --bind /dev/pts "$ROOTFS/dev/pts"
           sudo mount -t proc proc "$ROOTFS/proc"
           sudo mount -t sysfs sysfs "$ROOTFS/sys"
-
-          cat << 'CHROOTEOF' | sudo chroot "$ROOTFS" /bin/bash
+          
+          # ---------- كتابة سكربت chroot عبر echo ----------
+          sudo tee "$ROOTFS/tmp/setup.sh" > /dev/null << 'EOF'
+          #!/bin/bash
           set -e
-
-          # مستودعات
+          
           echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list
           echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
           echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list
           apt-get update -qq
-
-          # تثبيت الحزم الأساسية
+          
           apt-get install -y --no-install-recommends \
             linux-image-amd64 live-boot live-config live-config-systemd \
             user-setup sudo firmware-linux-free \
             xserver-xorg-video-all xserver-xorg-input-all dbus-x11 \
             task-lxde-desktop lightdm network-manager network-manager-gnome \
             arc-theme papirus-icon-theme zram-tools locales \
-            fonts-noto-core fonts-kacst
-
-          # تثبيت GRUB و syslinux
-          apt-get install -y --no-install-recommends grub-pc-bin grub-efi-amd64-bin syslinux isolinux
-
-          # اللغة
+            fonts-noto-core fonts-kacst grub-pc-bin grub-efi-amd64-bin syslinux isolinux
+          
           echo "ar_SA.UTF-8 UTF-8" > /etc/locale.gen
           echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
           locale-gen
           echo "LANG=ar_SA.UTF-8" > /etc/default/locale
-
-          # لوحة المفاتيح
+          
           echo 'XKBMODEL="pc105"' > /etc/default/keyboard
           echo 'XKBLAYOUT="ara,us"' >> /etc/default/keyboard
           echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> /etc/default/keyboard
-
-          # تسجيل الدخول التلقائي
+          
           mkdir -p /etc/lightdm
           printf '[Seat:*]\nautologin-user=user\nautologin-user-timeout=0\nuser-session=LXDE\n' > /etc/lightdm/lightdm.conf
-
-          # تعطيل الخدمات غير الضرورية
-          for s in ModemManager bluetooth cups avahi-daemon; do
-            systemctl disable $s 2>/dev/null || true
+          
+          for service in ModemManager bluetooth cups avahi-daemon; do
+            systemctl disable "$service" 2>/dev/null || true
           done
-
+          
           apt-get clean
           rm -rf /var/lib/apt/lists/*
-          CHROOTEOF
-
+          EOF
+          
+          sudo chmod +x "$ROOTFS/tmp/setup.sh"
+          sudo chroot "$ROOTFS" /bin/bash /tmp/setup.sh
+          
           sudo umount -lf "$ROOTFS/dev/pts" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys" || true
-
-          # ---------- تجهيز squashfs ----------
+          
+          # ---------- squashfs ----------
           sudo mksquashfs "$ROOTFS" "$ISODIR/live/filesystem.squashfs" -comp xz -b 1M -noappend
-          printf '%s' "$(sudo du -sx --block-size=1 "$ROOTFS" | cut -f1)" > "$ISODIR/live/filesystem.size"
-
-          # ---------- النواة ----------
+          printf '%s' "$(sudo du -sx --block-size=1 "$ROOTFS" | cut -f1)" | sudo tee "$ISODIR/live/filesystem.size" > /dev/null
+          
+          # ---------- kernel ----------
           sudo cp "$ROOTFS"/boot/vmlinuz-* "$ISODIR/live/vmlinuz"
           sudo cp "$ROOTFS"/boot/initrd.img-* "$ISODIR/live/initrd"
-
-          # ---------- إعدادات الإقلاع ----------
+          
+          # ---------- boot configs ----------
           sudo cp /usr/lib/ISOLINUX/isolinux.bin "$ISODIR/boot/isolinux/"
           sudo cp /usr/lib/syslinux/modules/bios/menu.c32 "$ISODIR/boot/isolinux/"
           sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 "$ISODIR/boot/isolinux/"
           sudo cp /usr/lib/syslinux/modules/bios/libutil.c32 "$ISODIR/boot/isolinux/"
-
-          cat << 'ISOCFG' | sudo tee "$ISODIR/boot/isolinux/isolinux.cfg"
-UI menu.c32
-PROMPT 0
-TIMEOUT 50
-DEFAULT live
-LABEL live
-  MENU LABEL MyLive – Live Session
-  KERNEL /live/vmlinuz
-  APPEND initrd=/live/initrd boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle
-ISOCFG
-
-          cat << 'GRUBCFG' | sudo tee "$ISODIR/boot/grub/grub.cfg"
-set timeout=5
-menuentry "MyLive – Live Session" {
-  linux /live/vmlinuz boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle
-  initrd /live/initrd
-}
-GRUBCFG
-
-          # ---------- بناء EFI ----------
+          
+          echo 'UI menu.c32' | sudo tee "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo 'PROMPT 0' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo 'TIMEOUT 50' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo 'DEFAULT live' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo 'LABEL live' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo '  MENU LABEL MyLive – Live Session' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo '  KERNEL /live/vmlinuz' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          echo '  APPEND initrd=/live/initrd boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle' | sudo tee -a "$ISODIR/boot/isolinux/isolinux.cfg" > /dev/null
+          
+          echo 'set timeout=5' | sudo tee "$ISODIR/boot/grub/grub.cfg" > /dev/null
+          echo 'menuentry "MyLive – Live Session" {' | sudo tee -a "$ISODIR/boot/grub/grub.cfg" > /dev/null
+          echo '  linux /live/vmlinuz boot=live quiet splash locales=ar_SA.UTF-8 keyboard-layouts=ara,us keyboard-options=grp:alt_shift_toggle' | sudo tee -a "$ISODIR/boot/grub/grub.cfg" > /dev/null
+          echo '  initrd /live/initrd' | sudo tee -a "$ISODIR/boot/grub/grub.cfg" > /dev/null
+          echo '}' | sudo tee -a "$ISODIR/boot/grub/grub.cfg" > /dev/null
+          
+          # ---------- EFI ----------
           sudo grub-mkstandalone --format=x86_64-efi --output="$ISODIR/EFI/boot/bootx64.efi" \
             --modules="part_gpt part_msdos fat iso9660 search search_label linux linuxefi echo configfile all_video gfxterm" \
             "boot/grub/grub.cfg=$ISODIR/boot/grub/grub.cfg"
@@ -144,8 +136,8 @@ GRUBCFG
           sudo mkfs.fat -n EFIBOOT "$ISODIR/EFI/boot/efiboot.img"
           sudo mmd -i "$ISODIR/EFI/boot/efiboot.img" ::/EFI ::/EFI/BOOT
           sudo mcopy -i "$ISODIR/EFI/boot/efiboot.img" "$ISODIR/EFI/boot/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
-
-          # ---------- إنشاء ISO ----------
+          
+          # ---------- ISO ----------
           sudo xorriso -as mkisofs \
             -iso-level 3 -volid "MyLive" \
             -b boot/isolinux/isolinux.bin -c boot/isolinux/boot.cat \
@@ -153,8 +145,8 @@ GRUBCFG
             -eltorito-alt-boot -e EFI/boot/efiboot.img -no-emul-boot \
             -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
             -output "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso" "$ISODIR"
-
-          sudo sha256sum "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso" > "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso.sha256"
+          
+          sudo sha256sum "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso" | sudo tee "$OUTPUT_DIR/${{ env.DISTRO_NAME }}.iso.sha256" > /dev/null
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
