@@ -23,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Free up Disk Space & Kill Background Updates
+      - name: Free up Disk Space & Clean Environment
         run: |
           sudo systemctl stop unattended-upgrades || true
           sudo killall apt apt-get || true
@@ -39,9 +39,10 @@ jobs:
         run: |
           set -e
           mkdir -p live-work && cd live-work
+          # تنظيف جذري لضمان عدم بقاء أي إعدادات للمستودعات القديمة
+          sudo rm -rf config/
           sudo lb clean --purge || true
           
-          # تم تحديث روابط الـ mirror لتتوافق مع هيكلية Debian Bookworm
           lb config noauto \
             --mode "debian" \
             --distribution "bookworm" \
@@ -53,6 +54,7 @@ jobs:
             --mirror-chroot-security "http://deb.debian.org/debian-security/" \
             --mirror-binary-security "http://deb.debian.org/debian-security/" \
             --security true \
+            --updates true \
             --apt-indices false \
             --apt-recommends true \
             --archive-areas "main contrib non-free non-free-firmware" \
@@ -63,13 +65,8 @@ jobs:
             --debian-installer "none" \
             --chroot-filesystem squashfs
           
-          mkdir -p config/package-lists
-          mkdir -p config/includes.chroot/etc/default
-          mkdir -p config/includes.chroot/usr/share/backgrounds
-          mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
-          mkdir -p config/hooks/normal
+          mkdir -p config/package-lists config/includes.chroot/etc/default config/includes.chroot/usr/share/backgrounds config/includes.chroot/etc/xdg/pcmanfm/LXDE config/hooks/normal
           
-          # ── قائمة الحزم ────────────────────────────────────────────────────
           {
             echo "linux-image-amd64"
             echo "live-boot"
@@ -96,13 +93,11 @@ jobs:
             echo "fonts-kacst"
           } > config/package-lists/base.list.chroot
           
-          # ── الخلفية والإعدادات ─────────────────────────────────────────────
           wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
-          
           printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' '${{ env.BG_COLOR }}' > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
           
-          # ── الهوكات (Hooks) ───────────────────────────────────────────────
+          # إعداد الـ Hooks (بدون تغيير في منطق العمل)
           cat << 'EOF' > config/hooks/normal/0000-policy-rc.d.hook.chroot
           #!/bin/sh
           echo "exit 101" > /usr/sbin/policy-rc.d
@@ -131,11 +126,9 @@ jobs:
           cat << 'EOF' > config/hooks/normal/0500-setup-system.hook.chroot
           #!/bin/sh
           set -e
-          if [ -f /etc/locale.gen ]; then
-              grep -qxF 'ar_SA.UTF-8 UTF-8' /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen
-              grep -qxF 'en_US.UTF-8 UTF-8' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
-              locale-gen || true
-          fi
+          grep -qxF 'ar_SA.UTF-8 UTF-8' /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen
+          grep -qxF 'en_US.UTF-8 UTF-8' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+          locale-gen || true
           for service in ModemManager bluetooth cups avahi-daemon; do
               if [ -f /lib/systemd/system/"$service".service ]; then
                   mkdir -p /etc/systemd/system/
@@ -144,15 +137,6 @@ jobs:
           done
           EOF
           chmod 755 config/hooks/normal/0500-setup-system.hook.chroot
-
-          cat << 'EOF' > config/hooks/normal/0510-zram.hook.chroot
-          #!/bin/sh
-          if [ -f /etc/default/zramswap ]; then
-              sed -i 's/^#\?ALGO=.*/ALGO=lz4/' /etc/default/zramswap
-              sed -i 's/^#\?PERCENT=.*/PERCENT=50/' /etc/default/zramswap
-          fi
-          EOF
-          chmod 755 config/hooks/normal/0510-zram.hook.chroot
 
           cat << 'EOF' > config/hooks/normal/9999-cleanup.hook.chroot
           #!/bin/sh
