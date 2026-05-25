@@ -28,7 +28,8 @@ env:
 jobs:
   build-iso:
     name: Build ISO
-    runs-on: ubuntu-22.04
+    # [التصحيح الأول] استخدام أحدث بيئة متوافقة مع مفاتيح تشفير دبيان الحديثة
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: write
@@ -58,17 +59,23 @@ jobs:
           restore-keys: |
             apt-cache-${{ runner.os }}-
 
-      - name: Install host tools (With Debian Keyring Fix)
+      - name: Install host tools & Update Keyrings
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends live-build debian-archive-keyring
+          sudo apt-get install -y --no-install-recommends live-build curl gnupg
+          
+          # [التصحيح الثاني] جلب وتثبيت أحدث مفاتيح دبيان الرسمية قسرياً لمنع خطأ debootstrap
+          curl -sO http://ftp.us.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.4_all.deb
+          sudo dpkg -i debian-archive-keyring_2023.4_all.deb || true
 
       - name: Build live system
         run: |
           set -e
           mkdir -p live-work && cd live-work
           
-          # إعداد معماري متكامل لبيئة دبيان الحية
+          # [التصحيح الثالث] مسح أي آثار لبناء سابق فاشل قد يفسد بيئة الـ chroot
+          sudo lb clean --purge || true
+          
           lb config noauto \
             --mode "debian" \
             --distribution "bookworm" \
@@ -87,7 +94,6 @@ jobs:
           
           mkdir -p config/package-lists
           
-          # [تصحيح] إضافة حزم الإقلاع والـ kernel الأساسية لضمان عمل الـ ISO بشكل سليم
           {
             echo "linux-image-amd64"
             echo "live-boot"
@@ -109,7 +115,6 @@ jobs:
             echo "gvfs"
           } > config/package-lists/base.list.chroot
 
-          # تهيئة المجلدات الهيكلية للنظام
           mkdir -p config/includes.chroot/etc/default
           mkdir -p config/includes.chroot/etc/xdg/lxsession/LXDE
           mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
@@ -162,7 +167,6 @@ jobs:
           </openbox_config>
           EOF
 
-          # بناء مجلد الـ hooks وضبط الأذونات القياسية للـ Chroot
           mkdir -p config/hooks/normal
           
           {
@@ -173,11 +177,10 @@ jobs:
             echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true'
           } > config/hooks/normal/0500-disable-services.hook.chroot
           
-          # [تصحيح] منح صلاحيات الوصول الكاملة لـ root قبل تشغيل التجميع
           chmod 755 config/hooks/normal/0500-disable-services.hook.chroot
           
-          # تصفية المتغيرات البيئية المضيفة وإطلاق البناء
-          sudo env -i HOME=$HOME PATH=$PATH lb build
+          # تنفيذ أمر البناء بصلاحيات الجذور
+          sudo lb build
           
           mkdir -p "$GITHUB_WORKSPACE/output"
           cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
@@ -194,4 +197,3 @@ jobs:
           path: output/
           retention-days: 7
           compression-level: 0
-
