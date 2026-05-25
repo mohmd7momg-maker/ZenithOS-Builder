@@ -49,7 +49,6 @@ jobs:
             VER="$(date +%Y%m%d)"
           fi
           echo "version=${VER}" >> $GITHUB_OUTPUT
-          echo "ISO will be named: ${{ env.DISTRO_NAME }}-${VER}.iso"
 
       - name: Cache host apt packages
         uses: actions/cache@v4
@@ -82,62 +81,81 @@ jobs:
           
           export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
           
-          echo "task-lxde-desktop" > config/package-lists/base.list.chroot
-          echo "network-manager" >> config/package-lists/base.list.chroot
-          echo "network-manager-gnome" >> config/package-lists/base.list.chroot
-          echo "arc-theme" >> config/package-lists/base.list.chroot
-          echo "papirus-icon-theme" >> config/package-lists/base.list.chroot
-          
-          echo "zram-tools" >> config/package-lists/base.list.chroot
-          echo "locales" >> config/package-lists/base.list.chroot
-          echo "fonts-noto" >> config/package-lists/base.list.chroot
-          echo "fonts-noto-arabic" >> config/package-lists/base.list.chroot
-          echo "xarchiver" >> config/package-lists/base.list.chroot
-          echo "zip" >> config/package-lists/base.list.chroot
-          echo "unzip" >> config/package-lists/base.list.chroot
-          echo "p7zip-full" >> config/package-lists/base.list.chroot
-          echo "gvfs" >> config/package-lists/base.list.chroot
+          {
+            echo "task-lxde-desktop"
+            echo "network-manager"
+            echo "network-manager-gnome"
+            echo "arc-theme"
+            echo "papirus-icon-theme"
+            echo "zram-tools"
+            echo "locales"
+            echo "fonts-noto"
+            echo "fonts-noto-arabic"
+            echo "xarchiver"
+            echo "zip"
+            echo "unzip"
+            echo "p7zip-full"
+            echo "gvfs"
+          } > config/package-lists/base.list.chroot
+
           mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
           mkdir -p config/includes.chroot/usr/share/backgrounds
           mkdir -p config/includes.chroot/etc/lightdm
-          echo "Downloading wallpaper..."
+          
           wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
+          
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
-          echo 'XKBMODEL="pc105"' > config/includes.chroot/etc/default/keyboard
-          echo 'XKBLAYOUT="ara,us"' >> config/includes.chroot/etc/default/keyboard
-          echo 'XKBVARIANT=""' >> config/includes.chroot/etc/default/keyboard
-          echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> config/includes.chroot/etc/default/keyboard
-          echo 'BACKSPACE="guess"' >> config/includes.chroot/etc/default/keyboard
-          echo "[*]" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-          echo "wallpaper_mode=stretch" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-          echo "wallpaper=/usr/share/backgrounds/wallpaper.jpg" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-          echo "desktop_bg=${{ env.BG_COLOR }}" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-          echo "[Session]" > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "window_manager=openbox" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "disable_autostart=no" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "[GTK]" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "sGtk/ThemeName=${{ env.THEME_NAME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "sGtk/IconThemeName=${{ env.ICON_THEME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo "sGtk/FontName=${{ env.FONT_NAME }} ${{ env.FONT_SIZE }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '<openbox_config xmlns="http://openbox.org/3.4/rc">' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '  <theme>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo "    <name>${{ env.THEME_NAME }}</name>" >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '    <titleLayout>NLIMC</titleLayout>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '    <keepBorder>yes</keepBorder>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '  </theme>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '  <desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '    <number>2</number>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '  </desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '</openbox_config>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
-          echo '#!/bin/sh' > config/hooks/normal/0500-disable-services.hook.chroot
-          echo 'systemctl disable --now ModemManager.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
-          echo 'systemctl disable --now bluetooth.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
-          echo 'systemctl disable --now cups.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
-          echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
+          
+          {
+            echo 'XKBMODEL="pc105"'
+            echo 'XKBLAYOUT="ara,us"'
+            echo 'XKBVARIANT=""'
+            echo 'XKBOPTIONS="grp:alt_shift_toggle"'
+            echo 'BACKSPACE="guess"'
+          } > config/includes.chroot/etc/default/keyboard
+
+          {
+            echo "[*]"
+            echo "wallpaper_mode=stretch"
+            echo "wallpaper=/usr/share/backgrounds/wallpaper.jpg"
+            echo "desktop_bg=${{ env.BG_COLOR }}"
+          } > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+
+          {
+            echo "[Session]"
+            echo "window_manager=openbox"
+            echo "disable_autostart=no"
+            echo ""
+            echo "[GTK]"
+            echo "sGtk/ThemeName=${{ env.THEME_NAME }}"
+            echo "sGtk/IconThemeName=${{ env.ICON_THEME }}"
+            echo "sGtk/FontName=${{ env.FONT_NAME }} ${{ env.FONT_SIZE }}"
+          } > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+
+          cat << 'EOF' > config/includes.chroot/etc/xdg/openbox/rc.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <openbox_config xmlns="http://openbox.org/3.4/rc">
+            <theme>
+              <name>Arc</name>
+              <titleLayout>NLIMC</titleLayout>
+              <keepBorder>yes</keepBorder>
+            </theme>
+            <desktops>
+              <number>2</number>
+            </desktops>
+          </openbox_config>
+          EOF
+
+          {
+            echo '#!/bin/sh'
+            echo 'systemctl disable --now ModemManager.service 2>/dev/null || true'
+            echo 'systemctl disable --now bluetooth.service 2>/dev/null || true'
+            echo 'systemctl disable --now cups.service 2>/dev/null || true'
+            echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true'
+          } > config/hooks/normal/0500-disable-services.hook.chroot
           chmod +x config/hooks/normal/0500-disable-services.hook.chroot
+          
           sudo lb build
           mkdir -p "$GITHUB_WORKSPACE/output"
           cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
@@ -146,9 +164,8 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/output"
           sha256sum *.iso > ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
-          cat ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
 
-      - name: Upload artifact (no re-compression)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}
@@ -158,17 +175,15 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Create release (on tags)
+      - name: Create release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: "Arabic Live ISO Distribution Build"
+          name: "Arabic Live ISO Build"
           tag_name: ${{ github.ref_name }}
-          body: "Lightweight Arabic Live ISO System with LXDE Desktop Environment. Fully compiled and generated via automated GitHub Actions workflow."
+          body: "Automated lightweight Arabic GNU/Linux live image distribution built successfully via GitHub Actions."
           files: |
             output/*.iso
             output/*.sha256
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
