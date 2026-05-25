@@ -48,7 +48,6 @@ jobs:
           mkdir -p live-work && cd live-work
           sudo lb clean --purge || true
 
-          # lb config بدون sudo — lb build بـ sudo
           lb config noauto \
             --mode "debian" \
             --distribution "bookworm" \
@@ -110,12 +109,11 @@ jobs:
           echo "LANG=${{ env.SYSTEM_LOCALE }}" \
             > config/includes.chroot/etc/default/locale
 
-          cat > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf << 'EOF'
-[*]
-wallpaper_mode=stretch
-wallpaper=/usr/share/backgrounds/wallpaper.jpg
-desktop_bg=#2E3440
-EOF
+          # ✅ الإصلاح: printf بدل heredoc لتفادي [*] ككلمة YAML
+          printf '%s\n' '[*]' 'wallpaper_mode=stretch' \
+            'wallpaper=/usr/share/backgrounds/wallpaper.jpg' \
+            'desktop_bg=#2E3440' \
+            > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
 
           # ── هوك 0: يمنع تشغيل الخدمات داخل الـ chroot ────────────────────
           cat > config/hooks/normal/0000-policy-rc.d.hook.chroot << 'EOF'
@@ -132,7 +130,7 @@ echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-sel
 EOF
           chmod 755 config/hooks/normal/0010-prevent-interactive.hook.chroot
 
-          # ── هوك 2: autologin — printf لتفادي heredoc المتداخل ────────────
+          # ── هوك 2: autologin بـ printf لتفادي heredoc المتداخل ───────────
           printf '%s\n' \
             '#!/bin/sh' \
             'mkdir -p /etc/lightdm' \
