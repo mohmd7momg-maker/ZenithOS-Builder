@@ -82,17 +82,17 @@ jobs:
             --memtest "none"
 
           # ---------- packages ----------
-          cat > config/package-lists/base.list.chroot << 'EOF'
-task-lxde-desktop
-network-manager
-zram-tools
-locales
-fonts-noto
-fonts-noto-arabic
-xarchiver
-zip unzip p7zip-full
-gvfs
-EOF
+          echo "task-lxde-desktop" > config/package-lists/base.list.chroot
+          echo "network-manager" >> config/package-lists/base.list.chroot
+          echo "zram-tools" >> config/package-lists/base.list.chroot
+          echo "locales" >> config/package-lists/base.list.chroot
+          echo "fonts-noto" >> config/package-lists/base.list.chroot
+          echo "fonts-noto-arabic" >> config/package-lists/base.list.chroot
+          echo "xarchiver" >> config/package-lists/base.list.chroot
+          echo "zip" >> config/package-lists/base.list.chroot
+          echo "unzip" >> config/package-lists/base.list.chroot
+          echo "p7zip-full" >> config/package-lists/base.list.chroot
+          echo "gvfs" >> config/package-lists/base.list.chroot
           # اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
           # echo "firefox-esr" >> config/package-lists/base.list.chroot
 
@@ -105,59 +105,50 @@ EOF
           echo "Downloading wallpaper..."
           wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
 
-          # ---------- locale & keyboard ----------
+          # ---------- locale ----------
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
 
-          cat > config/includes.chroot/etc/default/keyboard << 'KBD'
-XKBMODEL="pc105"
-XKBLAYOUT="ara,us"
-XKBVARIANT=""
-XKBOPTIONS="grp:alt_shift_toggle"
-BACKSPACE="guess"
-KBD
+          # ---------- keyboard ----------
+          echo 'XKBMODEL="pc105"' > config/includes.chroot/etc/default/keyboard
+          echo 'XKBLAYOUT="ara,us"' >> config/includes.chroot/etc/default/keyboard
+          echo 'XKBVARIANT=""' >> config/includes.chroot/etc/default/keyboard
+          echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> config/includes.chroot/etc/default/keyboard
+          echo 'BACKSPACE="guess"' >> config/includes.chroot/etc/default/keyboard
 
           # ---------- desktop appearance ----------
-          cat > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf << 'DESK'
-[*]
-wallpaper_mode=stretch
-wallpaper=/usr/share/backgrounds/wallpaper.jpg
-desktop_bg=#2E3440
-DESK
+          echo "[*]" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+          echo "wallpaper_mode=stretch" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+          echo "wallpaper=/usr/share/backgrounds/wallpaper.jpg" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+          echo "desktop_bg=${{ env.BG_COLOR }}" >> config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
 
-          cat > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf << 'SES'
-[Session]
-window_manager=openbox
-disable_autostart=no
+          echo "[Session]" > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "window_manager=openbox" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "disable_autostart=no" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "[GTK]" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "sGtk/ThemeName=${{ env.THEME_NAME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "sGtk/IconThemeName=${{ env.ICON_THEME }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
+          echo "sGtk/FontName=${{ env.FONT_NAME }} ${{ env.FONT_SIZE }}" >> config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
 
-[GTK]
-sGtk/ThemeName=Arc
-sGtk/IconThemeName=Papirus
-sGtk/FontName=Noto Sans Arabic 11
-SES
-
-          cat > config/includes.chroot/etc/xdg/openbox/rc.xml << 'OBXML'
-<?xml version="1.0" encoding="UTF-8"?>
-<openbox_config xmlns="http://openbox.org/3.4/rc">
-  <theme>
-    <name>Arc</name>
-    <titleLayout>NLIMC</titleLayout>
-    <keepBorder>yes</keepBorder>
-  </theme>
-  <desktops>
-    <number>2</number>
-  </desktops>
-</openbox_config>
-OBXML
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '<openbox_config xmlns="http://openbox.org/3.4/rc">' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '  <theme>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo "    <name>${{ env.THEME_NAME }}</name>" >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '    <titleLayout>NLIMC</titleLayout>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '    <keepBorder>yes</keepBorder>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '  </theme>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '  <desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '    <number>2</number>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '  </desktops>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
+          echo '</openbox_config>' >> config/includes.chroot/etc/xdg/openbox/rc.xml
 
           # ---------- disable useless services ----------
-          cat > config/hooks/normal/0500-disable-services.hook.chroot << 'SVC'
-#!/bin/sh
-systemctl disable --now ModemManager.service 2>/dev/null || true
-systemctl disable --now bluetooth.service 2>/dev/null || true
-systemctl disable --now cups.service 2>/dev/null || true
-systemctl disable --now avahi-daemon.service 2>/dev/null || true
-SVC
+          echo '#!/bin/sh' > config/hooks/normal/0500-disable-services.hook.chroot
+          echo 'systemctl disable --now ModemManager.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
+          echo 'systemctl disable --now bluetooth.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
+          echo 'systemctl disable --now cups.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
+          echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true' >> config/hooks/normal/0500-disable-services.hook.chroot
           chmod +x config/hooks/normal/0500-disable-services.hook.chroot
 
           # ---------- build ----------
