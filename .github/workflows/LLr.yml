@@ -33,21 +33,14 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y \
-            live-build \
-            debian-keyring \
-            debian-archive-keyring \
-            curl gnupg wget xorriso \
-            isolinux mtools \
-            grub-efi-amd64-bin grub-efi-ia32-bin grub-pc-bin \
-            squashfs-tools
+          sudo apt-get install -y live-build debian-keyring debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-efi-ia32-bin grub-pc-bin squashfs-tools
 
       - name: Build System
         run: |
           set -e
           mkdir -p live-work && cd live-work
           sudo lb clean --purge || true
-
+          
           lb config noauto \
             --mode "debian" \
             --distribution "bookworm" \
@@ -68,13 +61,13 @@ jobs:
             --iso-volume "${{ env.DISTRO_NAME }}" \
             --debian-installer "none" \
             --chroot-filesystem squashfs
-
+          
           mkdir -p config/package-lists
           mkdir -p config/includes.chroot/etc/default
           mkdir -p config/includes.chroot/usr/share/backgrounds
           mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
           mkdir -p config/hooks/normal
-
+          
           # ── قائمة الحزم ────────────────────────────────────────────────────
           {
             echo "linux-image-amd64"
@@ -101,94 +94,76 @@ jobs:
             echo "fonts-noto-core"
             echo "fonts-kacst"
           } > config/package-lists/base.list.chroot
-
+          
           # ── الخلفية والإعدادات ─────────────────────────────────────────────
-          wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg \
-            "${{ env.WALLPAPER_URL }}" || true
-
-          echo "LANG=${{ env.SYSTEM_LOCALE }}" \
-            > config/includes.chroot/etc/default/locale
-
-          # ✅ الإصلاح: printf بدل heredoc لتفادي [*] ككلمة YAML
-          printf '%s\n' '[*]' 'wallpaper_mode=stretch' \
-            'wallpaper=/usr/share/backgrounds/wallpaper.jpg' \
-            'desktop_bg=#2E3440' \
-            > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-
-          # ── هوك 0: يمنع تشغيل الخدمات داخل الـ chroot ────────────────────
-          cat > config/hooks/normal/0000-policy-rc.d.hook.chroot << 'EOF'
-#!/bin/sh
-echo "exit 101" > /usr/sbin/policy-rc.d
-chmod +x /usr/sbin/policy-rc.d
-EOF
+          wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
+          echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
+          
+          printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' '${{ env.BG_COLOR }}' > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
+          
+          # ── الهوكات (Hooks) ───────────────────────────────────────────────
+          cat << 'EOF' > config/hooks/normal/0000-policy-rc.d.hook.chroot
+          #!/bin/sh
+          echo "exit 101" > /usr/sbin/policy-rc.d
+          chmod +x /usr/sbin/policy-rc.d
+          EOF
           chmod 755 config/hooks/normal/0000-policy-rc.d.hook.chroot
 
-          # ── هوك 1: منع التفاعل مع debconf ─────────────────────────────────
-          cat > config/hooks/normal/0010-prevent-interactive.hook.chroot << 'EOF'
-#!/bin/sh
-echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-selections
-EOF
+          cat << 'EOF' > config/hooks/normal/0010-prevent-interactive.hook.chroot
+          #!/bin/sh
+          echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-selections
+          EOF
           chmod 755 config/hooks/normal/0010-prevent-interactive.hook.chroot
 
-          # ── هوك 2: autologin بـ printf لتفادي heredoc المتداخل ───────────
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'mkdir -p /etc/lightdm' \
-            'cat > /etc/lightdm/lightdm.conf << CFG' \
-            '[Seat:*]' \
-            'autologin-user=user' \
-            'autologin-user-timeout=0' \
-            'user-session=LXDE' \
-            'CFG' \
-            > config/hooks/normal/0020-autologin.hook.chroot
+          cat << 'EOF' > config/hooks/normal/0020-autologin.hook.chroot
+          #!/bin/sh
+          mkdir -p /etc/lightdm
+          cat << CFG > /etc/lightdm/lightdm.conf
+          [Seat:*]
+          autologin-user=user
+          autologin-user-timeout=0
+          user-session=LXDE
+          CFG
+          EOF
           chmod 755 config/hooks/normal/0020-autologin.hook.chroot
 
-          # ── هوك 3: اللغة وتعطيل الخدمات غير الضرورية ─────────────────────
-          cat > config/hooks/normal/0500-setup-system.hook.chroot << 'EOF'
-#!/bin/sh
-set -e
-if [ -f /etc/locale.gen ]; then
-    grep -qxF 'ar_SA.UTF-8 UTF-8' /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen
-    grep -qxF 'en_US.UTF-8 UTF-8' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
-    locale-gen || true
-fi
-for service in ModemManager bluetooth cups avahi-daemon; do
-    if [ -f /lib/systemd/system/"$service".service ]; then
-        mkdir -p /etc/systemd/system/
-        ln -sf /dev/null /etc/systemd/system/"$service".service || true
-    fi
-done
-EOF
+          cat << 'EOF' > config/hooks/normal/0500-setup-system.hook.chroot
+          #!/bin/sh
+          set -e
+          if [ -f /etc/locale.gen ]; then
+              grep -qxF 'ar_SA.UTF-8 UTF-8' /etc/locale.gen || echo "ar_SA.UTF-8 UTF-8" >> /etc/locale.gen
+              grep -qxF 'en_US.UTF-8 UTF-8' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+              locale-gen || true
+          fi
+          for service in ModemManager bluetooth cups avahi-daemon; do
+              if [ -f /lib/systemd/system/"$service".service ]; then
+                  mkdir -p /etc/systemd/system/
+                  ln -sf /dev/null /etc/systemd/system/"$service".service || true
+              fi
+          done
+          EOF
           chmod 755 config/hooks/normal/0500-setup-system.hook.chroot
 
-          # ── هوك 4: إعداد ZRAM عبر zram-tools ────────────────────────────
-          cat > config/hooks/normal/0510-zram.hook.chroot << 'EOF'
-#!/bin/sh
-if [ -f /etc/default/zramswap ]; then
-    sed -i 's/^#\?ALGO=.*/ALGO=lz4/'      /etc/default/zramswap
-    sed -i 's/^#\?PERCENT=.*/PERCENT=50/' /etc/default/zramswap
-fi
-EOF
+          cat << 'EOF' > config/hooks/normal/0510-zram.hook.chroot
+          #!/bin/sh
+          if [ -f /etc/default/zramswap ]; then
+              sed -i 's/^#\?ALGO=.*/ALGO=lz4/' /etc/default/zramswap
+              sed -i 's/^#\?PERCENT=.*/PERCENT=50/' /etc/default/zramswap
+          fi
+          EOF
           chmod 755 config/hooks/normal/0510-zram.hook.chroot
 
-          # ── هوك 5: تنظيف الكاش قبل ضغط squashfs ──────────────────────────
-          cat > config/hooks/normal/9999-cleanup.hook.chroot << 'EOF'
-#!/bin/sh
-rm -f /usr/sbin/policy-rc.d
-apt-get clean
-rm -rf /var/cache/apt/archives/* /tmp/* /var/tmp/* /var/lib/apt/lists/*
-EOF
+          cat << 'EOF' > config/hooks/normal/9999-cleanup.hook.chroot
+          #!/bin/sh
+          rm -f /usr/sbin/policy-rc.d
+          apt-get clean
+          rm -rf /var/cache/apt/archives/* /tmp/* /var/tmp/* /var/lib/apt/lists/*
+          EOF
           chmod 755 config/hooks/normal/9999-cleanup.hook.chroot
 
-          # ── تعديل ملكية كامل config/ لـ root قبل lb build ─────────────────
           sudo chown -R root:root config/
-
-          sudo env \
-            DEBIAN_FRONTEND=noninteractive \
-            PATH="$PATH" \
-            HOME="$HOME" \
-            lb build
-
+          sudo env DEBIAN_FRONTEND=noninteractive PATH="$PATH" HOME="$HOME" lb build
+          
           if [ -f live-image-amd64.hybrid.iso ]; then
             mkdir -p ../output
             cp live-image-amd64.hybrid.iso ../output/${{ env.DISTRO_NAME }}.iso
