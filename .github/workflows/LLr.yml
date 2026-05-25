@@ -1,60 +1,203 @@
-# ... (بداية الملف كما هي) ...
+name: Build Lightweight Arabic Live ISO
 
-      # ── 2. تثبيت الأدوات اللازمة على المضيف ─────────────────────────────
-      - name: Install Host Dependencies
+on:
+  workflow_dispatch:
+    inputs:
+      distro_version:
+        description: 'Version string (leave blank for YYYYMMDD)'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*.*'
+
+env:
+  DISTRO_NAME: "MyLive"
+  DISTRO_FULLNAME: "My Light Live"
+  DEBIAN_FRONTEND: "noninteractive"
+  SYSTEM_LOCALE: "ar_SA.UTF-8"
+  KEYBOARD_LAYOUT: "ara,us"
+  KEYBOARD_SWITCH: "grp:alt_shift_toggle"
+  THEME_NAME: "Arc"
+  ICON_THEME: "Papirus"
+  FONT_NAME: "Noto Sans Arabic"
+  FONT_SIZE: "11"
+  WALLPAPER_URL: "https://source.unsplash.com/featured/1920x1080/?nature,calm"
+  BG_COLOR: "#2E3440"
+
+jobs:
+  build-iso:
+    name: Build ISO
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set ISO version
+        id: ver
+        run: |
+          if [[ -n "${{ github.event.inputs.distro_version }}" ]]; then
+            VER="${{ github.event.inputs.distro_version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+            VER="${VER#v}"
+          else
+            VER="$(date +%Y%m%d)"
+          fi
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "ISO will be named: ${{ env.DISTRO_NAME }}-${VER}.iso"
+
+      - name: Install host tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends live-build
 
-      # ── 3. بناء التوزيعة باستخدام live-build ─────────────────────────────
-      - name: Configure and Build Live System
+      - name: Build live system
         run: |
-          # إنشاء مجلد العمل
-          mkdir -p ./live-build-work && cd ./live-build-work
+          set -e
+          mkdir -p live-work && cd live-work
 
-          # ---- إعدادات live-build الأساسية ----
+          # ---------- lb config ----------
           lb config noauto \
             --distribution "buster" \
             --archive-areas "main contrib non-free" \
             --debian-installer "live" \
-            --bootappend-live "boot=live components quiet splash zram.enabled=1" \ # <-- تفعيل zram
+            --bootappend-live "boot=live components quiet splash zram.enabled=1 locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }}" \
             --binary-images "iso-hybrid" \
-            --iso-application "${{ env.DISTRO_NAME }}" \
+            --iso-application "${{ env.DISTRO_FULLNAME }}" \
             --iso-volume "${{ env.DISTRO_NAME }} ${{ steps.ver.outputs.version }}" \
             --linux-flavours "amd64" \
             --memtest "none"
 
-          # ---- قوائم الحزم (بدون أي أدوات تور) ----
-          # سطح مكتب LXDE خفيف جداً
-          echo "task-lxde-desktop" > config/package-lists/desktop.list.chroot # <-- LXDE بدلاً من Xfce
-          # إدارة الشبكة
-          echo "network-manager" >> config/package-lists/network.list.chroot
-          # متصفح إنترنت أساسي
-          echo "firefox-esr" >> config/package-lists/apps.list.chroot
-          # أدوات نظام مفيدة
-          echo "lxterminal" >> config/package-lists/apps.list.chroot # <-- استخدام LXTerminal
-          echo "pcmanfm" >> config/package-lists/apps.list.chroot
-          echo "leafpad" >> config/package-lists/apps.list.chroot
-          echo "gvfs" >> config/package-lists/apps.list.chroot
-          # أدوات ضغط وفك ضغط (خفيفة)
-          echo "xarchiver" >> config/package-lists/apps.list.chroot # <-- xarchiver بدلاً من file-roller
-          echo "zip unzip p7zip-full" >> config/package-lists/apps.list.chroot
-          # أدوات تحسين الذاكرة
-          echo "zram-tools" >> config/package-lists/apps.list.chroot # <-- لحزمة zram
+          # ---------- packages ----------
+          # Base desktop + network + essentials (NO heavy apps preinstalled)
+          cat > config/package-lists/base.list.chroot << 'EOF'
+  task-lxde-desktop
+  network-manager
+  zram-tools
+  locales
+  fonts-noto
+  fonts-noto-arabic
+  xarchiver
+  zip unzip p7zip-full
+  gvfs
+  # اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
+  # firefox-esr
+  EOF
 
-          # ---- تعطيل الخدمات غير الضرورية لتوفير الذاكرة ---- 
-          cat > config/hooks/normal/0500-disable-services.hook.chroot << 'EOF'
-          #!/bin/sh
-          echo "Disabling unnecessary services..."
-          systemctl disable --now ModemManager.service 2>/dev/null || true
-          systemctl disable --now bluetooth.service 2>/dev/null || true
-          systemctl disable --now cups.service 2>/dev/null || true
-          systemctl disable --now avahi-daemon.service 2>/dev/null || true
-          echo "Services disabled."
-          EOF
+          # ---------- customization folders ----------
+          mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
+          mkdir -p config/includes.chroot/usr/share/backgrounds
+          mkdir -p config/includes.chroot/etc/lightdm
+
+          # ---------- wallpaper ----------
+          echo "Downloading wallpaper..."
+          wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
+
+          # ---------- locale & keyboard ----------
+          echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
+          echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
+
+          cat > config/includes.chroot/etc/default/keyboard << 'KBD'
+  XKBMODEL="pc105"
+  XKBLAYOUT="ara,us"
+  XKBVARIANT=""
+  XKBOPTIONS="grp:alt_shift_toggle"
+  BACKSPACE="guess"
+  KBD
+
+          # ---------- desktop appearance ----------
+          cat > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf << 'DESK'
+  [*]
+  wallpaper_mode=stretch
+  wallpaper=/usr/share/backgrounds/wallpaper.jpg
+  desktop_bg=#2E3440
+  DESK
+
+          cat > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf << 'SES'
+  [Session]
+  window_manager=openbox
+  disable_autostart=no
+
+  [GTK]
+  sGtk/ThemeName=Arc
+  sGtk/IconThemeName=Papirus
+  sGtk/FontName=Noto Sans Arabic 11
+  SES
+
+          cat > config/includes.chroot/etc/xdg/openbox/rc.xml << 'OBXML'
+  <?xml version="1.0" encoding="UTF-8"?>
+  <openbox_config xmlns="http://openbox.org/3.4/rc">
+    <theme>
+      <name>Arc</name>
+      <titleLayout>NLIMC</titleLayout>
+      <keepBorder>yes</keepBorder>
+    </theme>
+    <desktops>
+      <number>2</number>
+    </desktops>
+  </openbox_config>
+  OBXML
+
+          # ---------- disable useless services ----------
+          cat > config/hooks/normal/0500-disable-services.hook.chroot << 'SVC'
+  #!/bin/sh
+  systemctl disable --now ModemManager.service 2>/dev/null || true
+  systemctl disable --now bluetooth.service 2>/dev/null || true
+  systemctl disable --now cups.service 2>/dev/null || true
+  systemctl disable --now avahi-daemon.service 2>/dev/null || true
+  SVC
           chmod +x config/hooks/normal/0500-disable-services.hook.chroot
 
-          # ---- بدء عملية البناء ----
+          # ---------- build ----------
           sudo lb build
 
-          # ... (باقي الخطوات كما هي) ...
+          # ---------- collect ISO ----------
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
+
+      - name: Generate checksum
+        run: |
+          cd "$GITHUB_WORKSPACE/output"
+          sha256sum *.iso > ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
+          cat ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}
+          path: |
+            output/*.iso
+            output/*.sha256
+          retention-days: 30
+
+      - name: Create release (on tags)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ env.DISTRO_FULLNAME }} ${{ steps.ver.outputs.version }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## ${{ env.DISTRO_FULLNAME }} v${{ steps.ver.outputs.version }}
+
+            نظام حي خفيف جداً بالعربية.
+            - سطح مكتب LXDE
+            - استهلاك منخفض جداً للذاكرة
+            - دعم كامل للغة العربية
+            - بدون برامج ثقيلة (يمكن تثبيتها بسهولة)
+
+            ### النسخ على USB
+            ```bash
+            sudo dd if=${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso of=/dev/sdX bs=4M status=progress conv=fsync
+            ```
+          files: |
+            output/*.iso
+            output/*.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
