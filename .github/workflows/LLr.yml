@@ -28,18 +28,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost 2>/dev/null || true
           sudo apt-get clean
 
-      - name: Install Dependencies and Update Keyring for Bookworm
+      - name: Install Dependencies and Update Keyring
         run: |
-          # تثبيت الأدوات الأساسية
           sudo apt-get update -qq
           sudo apt-get install -y live-build debian-archive-keyring curl gnupg wget xorriso isolinux mtools grub-efi-amd64-bin grub-pc-bin squashfs-tools
-
-          # تنزيل وتثبيت أحدث حزمة مفاتيح Debian Bookworm (رسمية)
           wget -q "http://ftp.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.3+deb12u2_all.deb"
           sudo dpkg -i debian-archive-keyring_2023.3+deb12u2_all.deb
-          rm debian-archive-keyring_2023.3+deb12u2_all.deb
-
-          # تحديث قاعدة بيانات الحزم للتأكد من التعرف على المفاتيح الجديدة
+          rm -f debian-archive-keyring_2023.3+deb12u2_all.deb
           sudo apt-get update -qq || true
 
       - name: Build System
@@ -58,7 +53,7 @@ jobs:
             --mirror-binary "http://deb.debian.org/debian/" \
             --mirror-chroot-security "http://deb.debian.org/debian-security/" \
             --mirror-binary-security "http://deb.debian.org/debian-security/" \
-            --security true \
+            --security false \
             --apt-recommends true \
             --archive-areas "main contrib non-free non-free-firmware" \
             --bootappend-live "boot=live components quiet splash locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }} keyboard-options=grp:alt_shift_toggle" \
@@ -68,15 +63,22 @@ jobs:
             --debian-installer "none" \
             --chroot-filesystem squashfs
 
-          mkdir -p config/package-lists config/includes.chroot/etc/default config/includes.chroot/usr/share/backgrounds config/includes.chroot/etc/xdg/pcmanfm/LXDE config/hooks/normal
+          mkdir -p config/package-lists config/archives config/includes.chroot/etc/default config/includes.chroot/usr/share/backgrounds config/includes.chroot/etc/xdg/pcmanfm/LXDE config/hooks/normal
+
+          # إضافة مستودع الأمان Bookworm-security بالمسار الصحيح
+          echo "deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" > config/archives/security.list.chroot
+
+          # إضافة مستودع التحديثات Bookworm-updates
+          echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" > config/archives/updates.list.chroot
 
           {
             echo "linux-image-amd64"
             echo "live-boot"
             echo "live-config"
             echo "live-config-systemd"
+            echo "user-setup"
             echo "sudo"
-            echo "firmware-linux"
+            echo "firmware-linux-free"
             echo "ca-certificates"
             echo "curl"
             echo "wget"
@@ -99,7 +101,7 @@ jobs:
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
           printf '[*]\nwallpaper_mode=stretch\nwallpaper=/usr/share/backgrounds/wallpaper.jpg\ndesktop_bg=%s\n' "${{ env.BG_COLOR }}" > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
 
-          # كتابة customize.sh بأمان تام (باستخدام echo فقط)
+          # كتابة customize.sh بأمان تام باستخدام echo فقط
           echo '#!/bin/bash' > customize.sh
           echo 'set -e' >> customize.sh
           echo '' >> customize.sh
