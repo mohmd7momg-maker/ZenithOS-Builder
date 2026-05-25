@@ -1,96 +1,60 @@
-name: Build LiteLive Arabic ISO
+# ... (بداية الملف كما هي) ...
 
-on:
-  push:
-    tags: ['v*.*']
-  workflow_dispatch:
-    inputs:
-      distro_version:
-        description: 'Version string (leave blank for YYYYMMDD)'
-        required: false
-        default: ''
-
-env:
-  DISTRO_NAME: LiteLive
-  MIRROR: http://archive.ubuntu.com/ubuntu
-  UBUNTU_SUITE: jammy
-  ARCH: amd64
-
-jobs:
-  build:
-    name: Build ISO
-    runs-on: ubuntu-22.04
-    timeout-minutes: 40
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Determine version
-        id: ver
-        shell: bash
+      # ── 2. تثبيت الأدوات اللازمة على المضيف ─────────────────────────────
+      - name: Install Host Dependencies
         run: |
-          if [[ -n "${{ github.event.inputs.distro_version }}" ]]; then
-            VER="${{ github.event.inputs.distro_version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VER="${GITHUB_REF#refs/tags/}"
-            VER="${VER#v}"
-          else
-            VER="$(date +%Y%m%d)"
-          fi
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends live-build
 
-      - name: Restore host APT cache
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-host-${{ runner.os }}-${{ hashFiles('build.sh') }}
-          restore-keys: apt-host-${{ runner.os }}-
-
-      - name: Build ISO
-        env:
-          DISTRO_VERSION: ${{ steps.ver.outputs.version }}
+      # ── 3. بناء التوزيعة باستخدام live-build ─────────────────────────────
+      - name: Configure and Build Live System
         run: |
-          sudo --preserve-env=DISTRO_NAME,DISTRO_VERSION,MIRROR,UBUNTU_SUITE,ARCH bash build.sh
+          # إنشاء مجلد العمل
+          mkdir -p ./live-build-work && cd ./live-build-work
 
-      - name: Show output
-        run: ls -lh output/
+          # ---- إعدادات live-build الأساسية ----
+          lb config noauto \
+            --distribution "buster" \
+            --archive-areas "main contrib non-free" \
+            --debian-installer "live" \
+            --bootappend-live "boot=live components quiet splash zram.enabled=1" \ # <-- تفعيل zram
+            --binary-images "iso-hybrid" \
+            --iso-application "${{ env.DISTRO_NAME }}" \
+            --iso-volume "${{ env.DISTRO_NAME }} ${{ steps.ver.outputs.version }}" \
+            --linux-flavours "amd64" \
+            --memtest "none"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lite-live-ar-${{ steps.ver.outputs.version }}
-          path: |
-            output/*.iso
-            output/*.sha256
-          retention-days: 30
+          # ---- قوائم الحزم (بدون أي أدوات تور) ----
+          # سطح مكتب LXDE خفيف جداً
+          echo "task-lxde-desktop" > config/package-lists/desktop.list.chroot # <-- LXDE بدلاً من Xfce
+          # إدارة الشبكة
+          echo "network-manager" >> config/package-lists/network.list.chroot
+          # متصفح إنترنت أساسي
+          echo "firefox-esr" >> config/package-lists/apps.list.chroot
+          # أدوات نظام مفيدة
+          echo "lxterminal" >> config/package-lists/apps.list.chroot # <-- استخدام LXTerminal
+          echo "pcmanfm" >> config/package-lists/apps.list.chroot
+          echo "leafpad" >> config/package-lists/apps.list.chroot
+          echo "gvfs" >> config/package-lists/apps.list.chroot
+          # أدوات ضغط وفك ضغط (خفيفة)
+          echo "xarchiver" >> config/package-lists/apps.list.chroot # <-- xarchiver بدلاً من file-roller
+          echo "zip unzip p7zip-full" >> config/package-lists/apps.list.chroot
+          # أدوات تحسين الذاكرة
+          echo "zram-tools" >> config/package-lists/apps.list.chroot # <-- لحزمة zram
 
-      - name: Create GitHub Release (tags only)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "LiteLive Arabic ${{ steps.ver.outputs.version }}"
-          tag_name: ${{ github.ref_name }}
-          body: |
-            ## LiteLive Arabic Edition ${{ steps.ver.outputs.version }}
+          # ---- تعطيل الخدمات غير الضرورية لتوفير الذاكرة ---- 
+          cat > config/hooks/normal/0500-disable-services.hook.chroot << 'EOF'
+          #!/bin/sh
+          echo "Disabling unnecessary services..."
+          systemctl disable --now ModemManager.service 2>/dev/null || true
+          systemctl disable --now bluetooth.service 2>/dev/null || true
+          systemctl disable --now cups.service 2>/dev/null || true
+          systemctl disable --now avahi-daemon.service 2>/dev/null || true
+          echo "Services disabled."
+          EOF
+          chmod +x config/hooks/normal/0500-disable-services.hook.chroot
 
-            A lightweight Ubuntu 22.04-based live ISO with **Arabic Xfce 4.16** desktop.
-            Large apps (Firefox, VLC, Evince) are intentionally excluded to keep the ISO small.
-            Users can install them on demand with `sudo apt install`.
+          # ---- بدء عملية البناء ----
+          sudo lb build
 
-            ### Boot Options
-            - Live Session
-            - Persistent Mode (saves files to `casper-rw` partition)
-            - Run Entirely in RAM
-
-            ### Flash to USB
-            ```bash
-            sudo dd if=lite-live-ar-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
-            ```
-          files: |
-            output/*.iso
-            output/*.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ... (باقي الخطوات كما هي) ...
