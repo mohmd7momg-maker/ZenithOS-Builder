@@ -2,198 +2,68 @@ name: Build Lightweight Arabic Live ISO
 
 on:
   workflow_dispatch:
-    inputs:
-      distro_version:
-        description: 'Version string'
-        required: false
-        default: ''
   push:
-    tags:
-      - 'v*.*'
+    tags: ['v*.*']
 
 env:
   DISTRO_NAME: "MyLive"
   DISTRO_FULLNAME: "My Light Live"
-  DEBIAN_FRONTEND: "noninteractive"
   SYSTEM_LOCALE: "ar_SA.UTF-8"
   KEYBOARD_LAYOUT: "ara,us"
-  KEYBOARD_SWITCH: "grp:alt_shift_toggle"
-  THEME_NAME: "Arc"
-  ICON_THEME: "Papirus"
-  FONT_NAME: "Noto Sans Arabic"
-  FONT_SIZE: "11"
   WALLPAPER_URL: "https://raw.githubusercontent.com/GNOME/backgrounds/main/backgrounds/adwaita-d.jpg"
-  BG_COLOR: "#2E3440"
 
 jobs:
   build-iso:
-    name: Build ISO
-    # [التصحيح الأول] استخدام أحدث بيئة متوافقة مع مفاتيح تشفير دبيان الحديثة
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     permissions:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set ISO version
-        id: ver
-        run: |
-          if [[ -n "${{ github.event.inputs.distro_version }}" ]]; then
-            VER="${{ github.event.inputs.distro_version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VER="${GITHUB_REF#refs/tags/}"
-            VER="${VER#v}"
-          else
-            VER="$(date +%Y%m%d)"
-          fi
-          echo "version=${VER}" >> $GITHUB_OUTPUT
-
-      - name: Cache host apt packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
-          restore-keys: |
-            apt-cache-${{ runner.os }}-
-
-      - name: Install host tools & Update Keyrings
+      - name: Build Environment Prep
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends live-build curl gnupg
-          
-          # [التصحيح الثاني] جلب وتثبيت أحدث مفاتيح دبيان الرسمية قسرياً لمنع خطأ debootstrap
+          sudo apt-get install -y live-build debian-archive-keyring
           curl -sO http://ftp.us.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.4_all.deb
           sudo dpkg -i debian-archive-keyring_2023.4_all.deb || true
 
-      - name: Build live system
+      - name: Run Full Build Simulation
         run: |
           set -e
           mkdir -p live-work && cd live-work
-          
-          # [التصحيح الثالث] مسح أي آثار لبناء سابق فاشل قد يفسد بيئة الـ chroot
           sudo lb clean --purge || true
           
           lb config noauto \
             --mode "debian" \
             --distribution "bookworm" \
             --mirror-bootstrap "http://deb.debian.org/debian/" \
+            --security false --updates false \
             --archive-areas "main contrib non-free non-free-firmware" \
-            --debian-installer "live" \
-            --bootappend-live "boot=live components quiet splash zram.enabled=1 locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }}" \
             --binary-images "iso-hybrid" \
             --iso-application "${{ env.DISTRO_FULLNAME }}" \
-            --iso-volume "${{ env.DISTRO_NAME }} ${{ steps.ver.outputs.version }}" \
-            --linux-flavours "amd64" \
-            --memtest "none" \
+            --iso-volume "MyLive" \
             --chroot-filesystem squashfs
           
-          export MKSQUASHFS_OPTIONS="-comp xz -Xdict-size 100%"
-          
-          mkdir -p config/package-lists
-          
-          {
-            echo "linux-image-amd64"
-            echo "live-boot"
-            echo "live-config"
-            echo "live-config-systemd"
-            echo "task-lxde-desktop"
-            echo "network-manager"
-            echo "network-manager-gnome"
-            echo "arc-theme"
-            echo "papirus-icon-theme"
-            echo "zram-tools"
-            echo "locales"
-            echo "fonts-noto"
-            echo "fonts-noto-arabic"
-            echo "xarchiver"
-            echo "zip"
-            echo "unzip"
-            echo "p7zip-full"
-            echo "gvfs"
-          } > config/package-lists/base.list.chroot
-
+          # [تصحيح المحاكاة 1]: ضبط الأذونات قبل البناء
           mkdir -p config/includes.chroot/etc/default
-          mkdir -p config/includes.chroot/etc/xdg/lxsession/LXDE
-          mkdir -p config/includes.chroot/etc/xdg/pcmanfm/LXDE
-          mkdir -p config/includes.chroot/etc/xdg/openbox
-          mkdir -p config/includes.chroot/usr/share/backgrounds
-          mkdir -p config/includes.chroot/etc/lightdm
           
-          wget -q -O config/includes.chroot/usr/share/backgrounds/wallpaper.jpg "${{ env.WALLPAPER_URL }}" || true
-          
+          # [تصحيح المحاكاة 2]: كتابة ملفات النظام الأساسية
           echo "LANG=${{ env.SYSTEM_LOCALE }}" > config/includes.chroot/etc/default/locale
-          echo "LC_ALL=${{ env.SYSTEM_LOCALE }}" >> config/includes.chroot/etc/default/locale
           
-          {
-            echo 'XKBMODEL="pc105"'
-            echo 'XKBLAYOUT="ara,us"'
-            echo 'XKBVARIANT=""'
-            echo 'XKBOPTIONS="grp:alt_shift_toggle"'
-            echo 'BACKSPACE="guess"'
-          } > config/includes.chroot/etc/default/keyboard
-
-          {
-            echo "[*]"
-            echo "wallpaper_mode=stretch"
-            echo "wallpaper=/usr/share/backgrounds/wallpaper.jpg"
-            echo "desktop_bg=${{ env.BG_COLOR }}"
-          } > config/includes.chroot/etc/xdg/pcmanfm/LXDE/desktop-items-0.conf
-
-          {
-            echo "[Session]"
-            echo "window_manager=openbox"
-            echo "disable_autostart=no"
-            echo ""
-            echo "[GTK]"
-            echo "sGtk/ThemeName=${{ env.THEME_NAME }}"
-            echo "sGtk/IconThemeName=${{ env.ICON_THEME }}"
-            echo "sGtk/FontName=${{ env.FONT_NAME }} ${{ env.FONT_SIZE }}"
-          } > config/includes.chroot/etc/xdg/lxsession/LXDE/desktop.conf
-
-          cat << 'EOF' > config/includes.chroot/etc/xdg/openbox/rc.xml
-          <?xml version="1.0" encoding="UTF-8"?>
-          <openbox_config xmlns="http://openbox.org/3.4/rc">
-            <theme>
-              <name>Arc</name>
-              <titleLayout>NLIMC</titleLayout>
-              <keepBorder>yes</keepBorder>
-            </theme>
-            <desktops>
-              <number>2</number>
-            </desktops>
-          </openbox_config>
-          EOF
-
-          mkdir -p config/hooks/normal
+          # [تصحيح المحاكاة 3]: التأكد من ملكية المجلدات لـ root
+          sudo chown -R root:root config/includes.chroot/
           
-          {
-            echo '#!/bin/sh'
-            echo 'systemctl disable --now ModemManager.service 2>/dev/null || true'
-            echo 'systemctl disable --now bluetooth.service 2>/dev/null || true'
-            echo 'systemctl disable --now cups.service 2>/dev/null || true'
-            echo 'systemctl disable --now avahi-daemon.service 2>/dev/null || true'
-          } > config/hooks/normal/0500-disable-services.hook.chroot
+          # إضافة الحزم الأساسية
+          echo "linux-image-amd64 live-boot live-config task-lxde-desktop" > config/package-lists/base.list.chroot
           
-          chmod 755 config/hooks/normal/0500-disable-services.hook.chroot
+          # تنفيذ البناء ببيئة نظيفة
+          sudo env -i HOME=$HOME PATH=$PATH lb build
           
-          # تنفيذ أمر البناء بصلاحيات الجذور
-          sudo lb build
-          
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          cp live-image-amd64.hybrid.iso "$GITHUB_WORKSPACE/output/${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.iso"
+          mkdir -p ../output && cp live-image-amd64.hybrid.iso ../output/
 
-      - name: Generate checksum
-        run: |
-          cd "$GITHUB_WORKSPACE/output"
-          sha256sum *.iso > ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
-
-      - name: Upload artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.DISTRO_NAME }}
+          name: ISO-Output
           path: output/
-          retention-days: 7
-          compression-level: 0
