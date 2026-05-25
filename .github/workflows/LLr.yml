@@ -51,6 +51,14 @@ jobs:
           echo "version=${VER}" >> $GITHUB_OUTPUT
           echo "ISO will be named: ${{ env.DISTRO_NAME }}-${VER}.iso"
 
+      - name: Cache host apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/LLr.yml') }}
+          restore-keys: |
+            apt-cache-${{ runner.os }}-
+
       - name: Install host tools
         run: |
           sudo apt-get update -qq
@@ -63,7 +71,7 @@ jobs:
 
           # ---------- lb config ----------
           lb config noauto \
-            --distribution "buster" \
+            --distribution "bookworm" \
             --archive-areas "main contrib non-free" \
             --debian-installer "live" \
             --bootappend-live "boot=live components quiet splash zram.enabled=1 locales=${{ env.SYSTEM_LOCALE }} keyboard-layouts=${{ env.KEYBOARD_LAYOUT }}" \
@@ -84,9 +92,9 @@ fonts-noto-arabic
 xarchiver
 zip unzip p7zip-full
 gvfs
-# اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
-# firefox-esr
 EOF
+          # اختياري – يمكن إلغاء التعليق لتضمين متصفح Firefox:
+          # echo "firefox-esr" >> config/package-lists/base.list.chroot
 
           # ---------- customization folders ----------
           mkdir -p config/includes.chroot/etc/{default,xdg/lxsession/LXDE,xdg/pcmanfm/LXDE,xdg/openbox,skel}
@@ -165,7 +173,7 @@ SVC
           sha256sum *.iso > ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
           cat ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}.sha256
 
-      - name: Upload artifact
+      - name: Upload artifact (no re-compression)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.DISTRO_NAME }}-${{ steps.ver.outputs.version }}
@@ -173,6 +181,7 @@ SVC
             output/*.iso
             output/*.sha256
           retention-days: 30
+          compression-level: 0
 
       - name: Create release (on tags)
         if: github.ref_type == 'tag'
