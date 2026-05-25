@@ -162,18 +162,9 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: "${{ env.DISTRO_FULLNAME }} ${{ steps.ver.outputs.version }}"
+          name: "Arabic Live ISO Distribution Build"
           tag_name: ${{ github.ref_name }}
-          body: |
-            ## ${{ env.DISTRO_FULLNAME }}
-            نظام حي خفيف جداً يدعم اللغة العربية بشكل كامل.
-            
-            - واجهة خفيفة (LXDE) واستهلاك منخفض جداً للموارد.
-            - دعم كامل للكتابة والقراءة بالعربية افتراضياً.
-            
-            ### حرق النظام على فلاشة USB
-            يمكنك استخدام أدوات رسومية مثل Rufus أو BalenaEtcher، أو عبر سطر الأوامر (استبدل sdX بمسار الفلاشة الصحيح):
-            sudo dd if=filename.iso of=/dev/sdX bs=4M status=progress
+          body: "Lightweight Arabic Live ISO System with LXDE Desktop Environment. Fully compiled and generated via automated GitHub Actions workflow."
           files: |
             output/*.iso
             output/*.sha256
