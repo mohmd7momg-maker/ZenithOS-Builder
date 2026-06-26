@@ -26,7 +26,7 @@ jobs:
           restore-keys: |
             pacman-diag-xfce-fr-v2-${{ runner.os }}-
 
-      - name: Create build script 1/3
+      - name: Create build script (part 1/2)
         run: |
           cat > ${{ github.workspace }}/build.sh <<'PART1'
           #!/usr/bin/env bash
@@ -102,9 +102,20 @@ jobs:
           ethtool
           zenity
           yad
-          xfce4
-          xfce4-whiskermenu-plugin
+          exo
+          garcon
           thunar
+          thunar-volman
+          tumbler
+          xfce4-appfinder
+          xfce4-panel
+          xfce4-power-manager
+          xfce4-session
+          xfce4-settings
+          xfce4-whiskermenu-plugin
+          xfconf
+          xfdesktop
+          xfwm4
           xfce4-terminal
           lightdm
           lightdm-gtk-greeter
@@ -144,13 +155,11 @@ jobs:
           vulkan-intel
           vulkan-radeon
           intel-media-driver
-          libva-intel-driver
           libva-mesa-driver
           htop
           fastfetch
           nano
           papirus-icon-theme
-          arc-gtk-theme
           PKGLIST
           mkdir -p airootfs/etc/sudoers.d
           echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/wheel-nopasswd
@@ -223,7 +232,7 @@ jobs:
           cat > airootfs/etc/lightdm/lightdm-gtk-greeter.conf <<'GREETERCONF'
           [greeter]
           background=#1a1a2e
-          theme-name=Arc-Dark
+          theme-name=Adwaita-dark
           icon-theme-name=Papirus-Dark
           font-name=IBM Plex Sans 10
           clock-format=%H:%M
@@ -234,7 +243,10 @@ jobs:
               mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
               ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
           }
-          enable_service lightdm.service display-manager.service
+          # --- إصلاح مدير العرض (LightDM) ---
+          mkdir -p airootfs/etc/systemd/system
+          ln -sf /usr/lib/systemd/system/lightdm.service airootfs/etc/systemd/system/display-manager.service
+          # ---------------------------------
           enable_service NetworkManager.service multi-user.target
           enable_service ufw.service multi-user.target
           enable_service apparmor.service multi-user.target
@@ -244,7 +256,7 @@ jobs:
           mkdir -p airootfs/usr/local/bin
           PART1
 
-      - name: Create build script 2/3 — diagnostic GUI
+      - name: Create build script (part 2/2)
         run: |
           cat >> ${{ github.workspace }}/build.sh <<'PART2'
           cat > airootfs/usr/local/bin/upl-diag-gui.sh <<'DIAGMENU'
@@ -296,11 +308,6 @@ jobs:
           X-GNOME-Autostart-enabled=true
           NoDisplay=false
           AUTOSTART
-          PART2
-
-      - name: Create build script 3/3 — airootfs + build
-        run: |
-          cat >> ${{ github.workspace }}/build.sh <<'PART3'
           cat > "$PROFILE_DIR/airootfs.sh" <<'CUSTOMIZE'
           #!/bin/bash
           set -euo pipefail
@@ -330,7 +337,7 @@ jobs:
           <?xml version="1.0" encoding="UTF-8"?>
           <channel name="xsettings" version="1.0">
             <property name="Net" type="empty">
-              <property name="ThemeName"     type="string" value="Arc-Dark"/>
+              <property name="ThemeName"     type="string" value="Adwaita-dark"/>
               <property name="IconThemeName" type="string" value="Papirus-Dark"/>
             </property>
             <property name="Gtk" type="empty">
@@ -343,7 +350,7 @@ jobs:
           <?xml version="1.0" encoding="UTF-8"?>
           <channel name="xfwm4" version="1.0">
             <property name="general" type="empty">
-              <property name="theme"           type="string" value="Arc-Dark"/>
+              <property name="theme"           type="string" value="Default"/>
               <property name="title_font"      type="string" value="IBM Plex Sans Bold 10"/>
               <property name="button_layout"   type="string" value="O|HMC"/>
               <property name="use_compositing" type="bool"   value="true"/>
@@ -451,7 +458,7 @@ jobs:
           echo "[*] Construction terminée ✅"
           rm -rf "$WORKDIR/archiso-tmp"
           chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
-          PART3
+          PART2
 
       - name: Validate build script
         run: |
