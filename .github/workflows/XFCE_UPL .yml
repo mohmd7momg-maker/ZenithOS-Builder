@@ -51,10 +51,19 @@ jobs:
           cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
           cd "$PROFILE_DIR"
           echo -n > packages.x86_64
-          sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
           for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
               [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
           done
+          if [ -f grub/grub.cfg ]; then
+              cat >> grub/grub.cfg <<'MEMTESTGRUB'
+          menuentry 'Memtest86+ (Memory Diagnostic)' {
+              linux16 /arch/boot/memtest86+/memtest.bin
+          }
+          menuentry 'Memtest86+ EFI' {
+              chainloader /arch/boot/memtest86+/memtest.efi
+          }
+          MEMTESTGRUB
+          fi
           if ! grep -q "lsm=" "$PROFILE_DIR/grub/grub.cfg"; then echo "WARNING: LSM not injected into GRUB!" >&2; fi
           cat > pacman.conf <<'BUILDPAC'
           [options]
@@ -85,6 +94,7 @@ jobs:
           sof-firmware
           alsa-firmware
           alsa-ucm-conf
+          mkinitcpio-archiso
           syslinux
           memtest86+
           memtest86+-efi
@@ -119,6 +129,8 @@ jobs:
           xfce4-session
           xfce4-settings
           xfce4-whiskermenu-plugin
+          xfce4-pulseaudio-plugin
+          xfce4-screensaver
           xfconf
           xfdesktop
           xfwm4
@@ -251,6 +263,8 @@ jobs:
           }
           mkdir -p airootfs/etc/systemd/system
           ln -sf /usr/lib/systemd/system/lightdm.service airootfs/etc/systemd/system/display-manager.service
+          ln -sf /usr/lib/systemd/system/graphical.target airootfs/etc/systemd/system/default.target
+          ln -sf /dev/null airootfs/etc/systemd/system/NetworkManager-wait-online.service
           enable_service NetworkManager.service multi-user.target
           enable_service ufw.service multi-user.target
           enable_service apparmor.service multi-user.target
@@ -323,6 +337,11 @@ jobs:
           cp -r /etc/skel/. /home/arch/ 2>/dev/null || true
           chown -R arch:arch /home/arch
           chmod 750 /home/arch
+          su -c "xdg-user-dirs-update" - arch 2>/dev/null || true
+          # English UI + French keyboard (AZERTY)
+          sed -i 's/^#en_US\.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+          locale-gen
+          echo "LANG=en_US.UTF-8" > /etc/locale.conf
           echo "KEYMAP=fr" > /etc/vconsole.conf
           mkdir -p /etc/X11/xorg.conf.d
           cat > /etc/X11/xorg.conf.d/00-keyboard.conf <<'XKB'
@@ -335,6 +354,7 @@ jobs:
           ufw default deny incoming
           ufw default allow outgoing
           ufw --force enable
+          sensors-detect --auto > /dev/null 2>&1 || true
           XFCE_CONF="/home/arch/.config/xfce4/xfconf/xfce-perchannel-xml"
           mkdir -p "$XFCE_CONF"
           cat > "$XFCE_CONF/xsettings.xml" <<'XSET'
@@ -380,6 +400,7 @@ jobs:
                   <value type="int" value="5"/>
                   <value type="int" value="6"/>
                   <value type="int" value="7"/>
+                  <value type="int" value="8"/>
                 </property>
               </property>
             </property>
@@ -399,10 +420,11 @@ jobs:
               <property name="plugin-5" type="string" value="systray">
                 <property name="size-max" type="uint" value="22"/>
               </property>
-              <property name="plugin-6" type="string" value="separator">
+              <property name="plugin-6" type="string" value="pulseaudio"/>
+              <property name="plugin-7" type="string" value="separator">
                 <property name="style" type="uint" value="0"/>
               </property>
-              <property name="plugin-7" type="string" value="clock">
+              <property name="plugin-8" type="string" value="clock">
                 <property name="digital-format" type="string" value="%H:%M  %d/%m/%Y"/>
               </property>
             </property>
