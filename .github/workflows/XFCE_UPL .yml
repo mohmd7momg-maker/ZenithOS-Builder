@@ -1,422 +1,496 @@
-#!/usr/bin/env bash
-set -euo pipefail
-echo "[*] Début de la construction UPL-Diag (Enhanced)..."
-pacman-key --init && pacman-key --populate archlinux
-pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
-pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
-mkdir -p /etc/pacman.d
-echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
-grep -q '\[cachyos\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<'HOSTREPO'
-[cachyos]
-Include = /etc/pacman.d/cachyos-mirrorlist
-HOSTREPO
-pacman -Syu --needed --noconfirm archiso git curl reflector archlinux-keyring
-pacman -S --noconfirm cachyos-keyring 2>/dev/null || echo "[!] CachyOS keyring not available – continuing without it"
-reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
-WORKDIR="/workspace/upl-diag-build"
-PROFILE_DIR="$WORKDIR/archiso"
-mkdir -p "$WORKDIR"
-rm -rf "$PROFILE_DIR"
-cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
-cd "$PROFILE_DIR"
-sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
-for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
-    [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
-done
-if ! grep -q "lsm=" "$PROFILE_DIR/grub/grub.cfg"; then echo "⚠️  WARNING: LSM parameters were not injected into GRUB config!" >&2; fi
-cat > pacman.conf <<'BUILDPAC'
-[options]
-HoldPkg      = pacman glibc
-Architecture = x86_64
-SigLevel     = Never
-LocalFileSigLevel = Optional
-CacheDir     = /workspace/pacman-cache
-[cachyos]
-Server = https://mirror.cachyos.org/repo/$arch/$repo
-[core]
-Include = /etc/pacman.d/mirrorlist
-[extra]
-Include = /etc/pacman.d/mirrorlist
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-BUILDPAC
-mkdir -p airootfs/etc/pacman.d
-echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
-cat >> packages.x86_64 <<'PKGLIST'
-cachyos-keyring
-cachyos-mirrorlist
-cachyos-settings
-cachyos-hooks
-base
-linux-lts
-linux-firmware
-sof-firmware
-alsa-firmware
-alsa-ucm-conf
-pciutils
-usbutils
-dmidecode
-hwinfo
-lshw
-smartmontools
-hdparm
-stress-ng
-memtester
-mesa-utils
-vulkan-tools
-lm_sensors
-upower
-acpi
-alsa-utils
-ethtool
-zenity
-yad
-xfce4
-xfce4-whiskermenu-plugin
-thunar
-xfce4-terminal
-lightdm
-lightdm-gtk-greeter
-xorg-server
-xorg-xinit
-xorg-xrandr
-xorg-xset
-xf86-input-libinput
-xf86-video-vesa
-xdg-user-dirs
-ttf-ibm-plex
-network-manager-applet
-curl
-wget
-reflector
-sudo
-ntfs-3g
-exfatprogs
-mtools
-dosfstools
-efibootmgr
-grub
-os-prober
-cryptsetup
-zram-generator
-ananicy-cpp
-power-profiles-daemon
-apparmor
-ufw
-networkmanager
-pipewire
-pipewire-pulse
-pipewire-alsa
-wireplumber
-gst-plugin-pipewire
-mesa
-vulkan-intel
-vulkan-radeon
-intel-media-driver
-libva-intel-driver
-libva-mesa-driver
-htop
-fastfetch
-nano
-papirus-icon-theme
-arc-gtk-theme
-PKGLIST
-mkdir -p airootfs/etc/sudoers.d
-echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/wheel-nopasswd
-chmod 440 airootfs/etc/sudoers.d/wheel-nopasswd
-mkdir -p airootfs/etc/sysctl.d
-cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'SYSCTL'
-vm.swappiness=80
-vm.vfs_cache_pressure=50
-vm.dirty_ratio=10
-vm.dirty_background_ratio=5
-vm.dirty_expire_centisecs=3000
-vm.dirty_writeback_centisecs=500
-vm.page-cluster=0
-vm.min_free_kbytes=65536
-kernel.kptr_restrict=2
-kernel.unprivileged_bpf_disabled=1
-kernel.yama.ptrace_scope=1
-kernel.randomize_va_space=2
-kernel.nmi_watchdog=0
-net.core.bpf_jit_harden=2
-fs.file-max=2097152
-net.core.default_qdisc=cake
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_syncookies=1
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
-SYSCTL
-mkdir -p airootfs/etc/modules-load.d
-echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
-mkdir -p airootfs/etc/systemd/zram-generator.conf.d
-cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'ZRAMCONF'
-[zram0]
-zram-size = min(ram / 2, 4096)
-compression-algorithm = zstd
-swap-priority = 100
-ZRAMCONF
-mkdir -p airootfs/etc/systemd/oomd.conf.d
-cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'OOMDCONF'
-[OOM]
-DefaultMemoryPressureDurationSec=20s
-SwapUsedLimit=90%
-DefaultMemoryPressureLimit=60%
-OOMDCONF
-mkdir -p airootfs/etc/udev/rules.d
-cat > airootfs/etc/udev/rules.d/60-ioschedulers.rules <<'IOSCHEDULERS'
-ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
-ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
-ACTION=="add|change", KERNEL=="nvme*[!0-9]", ATTR{queue/scheduler}="none"
-IOSCHEDULERS
-mkdir -p airootfs/etc/systemd/journald.conf.d
-cat > airootfs/etc/systemd/journald.conf.d/limit-size.conf <<'JEOF'
-[Journal]
-SystemMaxUse=50M
-RuntimeMaxUse=50M
-JEOF
-mkdir -p airootfs/etc/systemd/system.conf.d
-cat > airootfs/etc/systemd/system.conf.d/startup-timeout.conf <<'SEOF'
-[Manager]
-DefaultTimeoutStartSec=10s
-DefaultTimeoutStopSec=10s
-SEOF
-mkdir -p airootfs/etc/lightdm
-cat > airootfs/etc/lightdm/lightdm.conf <<'LIGHTDMCONF'
-[Seat:*]
-autologin-user=arch
-autologin-user-timeout=0
-autologin-session=xfce
-LIGHTDMCONF
-cat > airootfs/etc/lightdm/lightdm-gtk-greeter.conf <<'GREETERCONF'
-[greeter]
-background=#1a1a2e
-theme-name=Arc-Dark
-icon-theme-name=Papirus-Dark
-font-name=IBM Plex Sans 10
-clock-format=%H:%M
-indicators=~host;~spacer;~session;~a11y;~power
-GREETERCONF
-enable_service() {
-    local svc="$1" tgt="$2"
-    mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
-    ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
-}
-enable_service lightdm.service display-manager.service
-enable_service NetworkManager.service multi-user.target
-enable_service ufw.service multi-user.target
-enable_service apparmor.service multi-user.target
-enable_service ananicy-cpp.service multi-user.target
-enable_service power-profiles-daemon.service multi-user.target
-enable_service systemd-oomd.service multi-user.target
-mkdir -p airootfs/usr/local/bin
-cat > airootfs/usr/local/bin/upl-diag-gui.sh <<'DIAGMENU'
-#!/bin/bash
-REPORT_DIR="$HOME/reports"
-mkdir -p "$REPORT_DIR"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-eval $(yad --center --borders=10 --title="Diagnostic Matériel" --text="Sélectionnez les tests à exécuter :" --form --field="CPU (Processeur):CHK" TRUE --field="RAM (Mémoire):CHK" TRUE --field="Stockage (Disques):CHK" TRUE --field="GPU (Carte graphique):CHK" TRUE --field="Audio (Son):CHK" FALSE --field="Réseau (Connectivité):CHK" TRUE --field="Batterie (Portable):CHK" FALSE --field="Capteurs (Température):CHK" TRUE --field="Infos Système (Aperçu):CHK" TRUE 2>/dev/null)
-if [ $? -ne 0 ]; then exit 0; fi
-OUT="$REPORT_DIR/rapport_complet_$TIMESTAMP.txt"
-echo "=== Rapport de Diagnostic Matériel - $(date) ===" | tee "$OUT"
-for i in $(seq 1 9); do
-    case $i in
-        1) echo -e "\n=== Informations CPU ===" | tee -a "$OUT"
-           lscpu | tee -a "$OUT"
-           echo "Test de stress de 20 secondes..." | tee -a "$OUT"
-           stress-ng --cpu 0 --timeout 20 --metrics-brief 2>&1 | tee -a "$OUT" ;;
-        2) echo -e "\n=== Informations Mémoire ===" | tee -a "$OUT"
-           free -h | tee -a "$OUT"
-           echo "Test de 100 Mo de mémoire..." | tee -a "$OUT"
-           memtester 100M 1 2>&1 | tee -a "$OUT" ;;
-        3) echo -e "\n=== Informations Stockage ===" | tee -a "$OUT"
-           lsblk | tee -a "$OUT"
-           for disk in $(lsblk -dno NAME,TYPE | grep disk | awk '{print $1}'); do
-               smartctl -a "/dev/$disk" 2>&1 | tee -a "$OUT" || true
-           done ;;
-        4) echo -e "\n=== Informations GPU ===" | tee -a "$OUT"
-           lspci | grep -i vga | tee -a "$OUT"
-           glxinfo | grep -i "renderer\|version" | tee -a "$OUT" ;;
-        5) echo -e "\n=== Périphériques Audio ===" | tee -a "$OUT"
-           aplay -l | tee -a "$OUT" ;;
-        6) echo -e "\n=== Informations Réseau ===" | tee -a "$OUT"
-           ip a | tee -a "$OUT"
-           ping -c 3 1.1.1.1 | tee -a "$OUT" ;;
-        7) echo -e "\n=== État de la Batterie ===" | tee -a "$OUT"
-           upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null | tee -a "$OUT" || echo "Pas de batterie (PC de bureau)" | tee -a "$OUT" ;;
-        8) echo -e "\n=== Capteurs de Température ===" | tee -a "$OUT"
-           sensors | tee -a "$OUT" ;;
-        9) echo -e "\n=== Aperçu du Système ===" | tee -a "$OUT"
-           fastfetch --stdout | tee -a "$OUT"
-           hwinfo --short | tee -a "$OUT" ;;
-    esac
-done
-yad --center --title="Diagnostic Terminé" --text="Rapport enregistré dans :\n$OUT" --button="Voir le rapport:0" --button="Fermer:1"
-if [ $? -eq 0 ]; then xfce4-terminal -e "less $OUT" --hold & fi
-DIAGMENU
-chmod +x airootfs/usr/local/bin/upl-diag-gui.sh
-mkdir -p airootfs/etc/xdg/autostart
-cat > airootfs/etc/xdg/autostart/upl-diag.desktop <<'AUTOSTART'
-[Desktop Entry]
-Type=Application
-Name=Outil de Diagnostic UPL
-Exec=/usr/local/bin/upl-diag-gui.sh
-Icon=system-software-install
-Categories=System;
-X-GNOME-Autostart-enabled=true
-NoDisplay=false
-AUTOSTART
-cat > "$PROFILE_DIR/airootfs.sh" <<'CUSTOMIZE'
-#!/bin/bash
-set -euo pipefail
-for grp in wheel audio video network storage autologin; do
-    groupadd -f "$grp"
-done
-id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage,autologin -s /bin/bash arch
-echo "arch:arch" | chpasswd
-cp -r /etc/skel/. /home/arch/ 2>/dev/null || true
-chown -R arch:arch /home/arch
-chmod 750 /home/arch
-echo "KEYMAP=fr" > /etc/vconsole.conf
-mkdir -p /etc/X11/xorg.conf.d
-cat > /etc/X11/xorg.conf.d/00-keyboard.conf <<'XKB'
-Section "InputClass"
-    Identifier "system-keyboard"
-    MatchIsKeyboard "on"
-    Option "XkbLayout" "fr"
-EndSection
-XKB
-ufw default deny incoming
-ufw default allow outgoing
-ufw --force enable
-XFCE_CONF="/home/arch/.config/xfce4/xfconf/xfce-perchannel-xml"
-mkdir -p "$XFCE_CONF"
-cat > "$XFCE_CONF/xsettings.xml" <<'XSET'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xsettings" version="1.0">
-  <property name="Net" type="empty">
-    <property name="ThemeName"     type="string" value="Arc-Dark"/>
-    <property name="IconThemeName" type="string" value="Papirus-Dark"/>
-  </property>
-  <property name="Gtk" type="empty">
-    <property name="FontName"          type="string" value="IBM Plex Sans 10"/>
-    <property name="MonospaceFontName" type="string" value="IBM Plex Mono 10"/>
-  </property>
-</channel>
-XSET
-cat > "$XFCE_CONF/xfwm4.xml" <<'XFWM'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfwm4" version="1.0">
-  <property name="general" type="empty">
-    <property name="theme"           type="string" value="Arc-Dark"/>
-    <property name="title_font"      type="string" value="IBM Plex Sans Bold 10"/>
-    <property name="button_layout"   type="string" value="O|HMC"/>
-    <property name="use_compositing" type="bool"   value="true"/>
-  </property>
-</channel>
-XFWM
-cat > "$XFCE_CONF/xfce4-panel.xml" <<'PANELXML'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-panel" version="1.0">
-  <property name="configver" type="int" value="2"/>
-  <property name="panels" type="array">
-    <value type="int" value="1"/>
-    <property name="panel-1" type="empty">
-      <property name="position"        type="string" value="p=6;x=0;y=0"/>
-      <property name="length"          type="uint"   value="100"/>
-      <property name="position-locked" type="bool"   value="true"/>
-      <property name="size"            type="uint"   value="32"/>
-      <property name="plugin-ids"      type="array">
-        <value type="int" value="1"/>
-        <value type="int" value="2"/>
-        <value type="int" value="3"/>
-        <value type="int" value="4"/>
-        <value type="int" value="5"/>
-        <value type="int" value="6"/>
-        <value type="int" value="7"/>
-      </property>
-    </property>
-  </property>
-  <property name="plugins" type="empty">
-    <property name="plugin-1" type="string" value="whiskermenu"/>
-    <property name="plugin-2" type="string" value="separator">
-      <property name="style" type="uint" value="0"/>
-    </property>
-    <property name="plugin-3" type="string" value="tasklist">
-      <property name="show-labels" type="bool" value="true"/>
-      <property name="grouping"    type="uint" value="0"/>
-    </property>
-    <property name="plugin-4" type="string" value="separator">
-      <property name="expand" type="bool" value="true"/>
-      <property name="style"  type="uint" value="0"/>
-    </property>
-    <property name="plugin-5" type="string" value="systray">
-      <property name="size-max" type="uint" value="22"/>
-    </property>
-    <property name="plugin-6" type="string" value="separator">
-      <property name="style" type="uint" value="0"/>
-    </property>
-    <property name="plugin-7" type="string" value="clock">
-      <property name="digital-format" type="string" value="%H:%M  %d/%m/%Y"/>
-    </property>
-  </property>
-</channel>
-PANELXML
-cat > "$XFCE_CONF/xfce4-screensaver.xml" <<'SSXML'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-screensaver" version="1.0">
-  <property name="saver" type="empty">
-    <property name="enabled" type="bool" value="false"/>
-  </property>
-  <property name="lock" type="empty">
-    <property name="enabled" type="bool" value="false"/>
-  </property>
-</channel>
-SSXML
-cat > "$XFCE_CONF/xfce4-power-manager.xml" <<'PMXML'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-power-manager" version="1.0">
-  <property name="xfce4-power-manager" type="empty">
-    <property name="blank-on-ac"      type="int"  value="0"/>
-    <property name="dpms-on-ac-off"   type="int"  value="0"/>
-    <property name="dpms-on-ac-sleep" type="int"  value="0"/>
-    <property name="dpms-enabled"     type="bool" value="false"/>
-  </property>
-</channel>
-PMXML
-mkdir -p /home/arch/.config/xfce4/terminal
-cat > /home/arch/.config/xfce4/terminal/terminalrc <<'TERMRC'
-[Configuration]
-FontName=IBM Plex Mono 11
-ColorForeground=#d3d7cf
-ColorBackground=#1e2029
-ColorCursor=#d3d7cf
-MiscShowUnsafePasteDialog=FALSE
-ScrollingLines=5000
-TERMRC
-mkdir -p /home/arch/.config/xfce4/panel
-cat > /home/arch/.config/xfce4/panel/whiskermenu-1.rc <<'WHISKER'
-button-icon=system-search
-button-title-visible=false
-button-icon-visible=true
-item-icon-size=2
-launcher-show-name=true
-launcher-show-description=false
-profile-shape=0
-recent-items-max=10
-show-category-name=true
-WHISKER
-chown -R arch:arch /home/arch/.config
-CUSTOMIZE
-chmod +x "$PROFILE_DIR/airootfs.sh"
-if grep -q "^squashfs_options=" profiledef.sh; then
-    sed -i 's|^squashfs_options=.*|squashfs_options="-comp zstd -Xcompression-level 3"|' profiledef.sh
-else
-    echo 'squashfs_options="-comp zstd -Xcompression-level 3"' >> profiledef.sh
-fi
-echo "[*] Début de mkarchiso..."
-mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
-echo "[*] Construction terminée ✅"
-rm -rf "$WORKDIR/archiso-tmp"
-chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
+name: UPL-Diag XFCE FR (Enhanced)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/upl-diag-xfce-fr.yml'
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Maximize Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo docker system prune -af || true
+
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/pacman-cache
+          key: pacman-diag-xfce-fr-v2-${{ runner.os }}-${{ hashFiles('.github/workflows/upl-diag-xfce-fr.yml') }}
+          restore-keys: |
+            pacman-diag-xfce-fr-v2-${{ runner.os }}-
+
+      - name: Create build script 1/3
+        run: |
+          cat > ${{ github.workspace }}/build.sh <<'PART1'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "[*] Début de la construction UPL-Diag (Enhanced)..."
+          pacman-key --init && pacman-key --populate archlinux
+          pacman-key --keyserver keyserver.ubuntu.com --recv-keys 882DCFE48E2051D48E2562ABF3B607488DB35A47
+          pacman-key --lsign-key 882DCFE48E2051D48E2562ABF3B607488DB35A47
+          mkdir -p /etc/pacman.d
+          echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > /etc/pacman.d/cachyos-mirrorlist
+          grep -q '\[cachyos\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<'HOSTREPO'
+          [cachyos]
+          Include = /etc/pacman.d/cachyos-mirrorlist
+          HOSTREPO
+          pacman -Syu --needed --noconfirm archiso git curl reflector archlinux-keyring
+          pacman -S --noconfirm cachyos-keyring 2>/dev/null || echo "[!] CachyOS keyring not available – continuing without it"
+          reflector --latest 10 --protocol https --country "United States,Germany,France" --sort rate --save /etc/pacman.d/mirrorlist
+          WORKDIR="/workspace/upl-diag-build"
+          PROFILE_DIR="$WORKDIR/archiso"
+          mkdir -p "$WORKDIR"
+          rm -rf "$PROFILE_DIR"
+          cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
+          cd "$PROFILE_DIR"
+          sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
+          for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
+              [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
+          done
+          if ! grep -q "lsm=" "$PROFILE_DIR/grub/grub.cfg"; then echo "WARNING: LSM not injected into GRUB!" >&2; fi
+          cat > pacman.conf <<'BUILDPAC'
+          [options]
+          HoldPkg      = pacman glibc
+          Architecture = x86_64
+          SigLevel     = Never
+          LocalFileSigLevel = Optional
+          CacheDir     = /workspace/pacman-cache
+          [cachyos]
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
+          [core]
+          Include = /etc/pacman.d/mirrorlist
+          [extra]
+          Include = /etc/pacman.d/mirrorlist
+          [multilib]
+          Include = /etc/pacman.d/mirrorlist
+          BUILDPAC
+          mkdir -p airootfs/etc/pacman.d
+          echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' > airootfs/etc/pacman.d/cachyos-mirrorlist
+          cat >> packages.x86_64 <<'PKGLIST'
+          cachyos-keyring
+          cachyos-mirrorlist
+          cachyos-settings
+          cachyos-hooks
+          base
+          linux-lts
+          linux-firmware
+          sof-firmware
+          alsa-firmware
+          alsa-ucm-conf
+          pciutils
+          usbutils
+          dmidecode
+          hwinfo
+          lshw
+          smartmontools
+          hdparm
+          stress-ng
+          memtester
+          mesa-utils
+          vulkan-tools
+          lm_sensors
+          upower
+          acpi
+          alsa-utils
+          ethtool
+          zenity
+          yad
+          xfce4
+          xfce4-whiskermenu-plugin
+          thunar
+          xfce4-terminal
+          lightdm
+          lightdm-gtk-greeter
+          xorg-server
+          xorg-xinit
+          xorg-xrandr
+          xorg-xset
+          xf86-input-libinput
+          xf86-video-vesa
+          xdg-user-dirs
+          ttf-ibm-plex
+          network-manager-applet
+          curl
+          wget
+          reflector
+          sudo
+          ntfs-3g
+          exfatprogs
+          mtools
+          dosfstools
+          efibootmgr
+          grub
+          os-prober
+          cryptsetup
+          zram-generator
+          ananicy-cpp
+          power-profiles-daemon
+          apparmor
+          ufw
+          networkmanager
+          pipewire
+          pipewire-pulse
+          pipewire-alsa
+          wireplumber
+          gst-plugin-pipewire
+          mesa
+          vulkan-intel
+          vulkan-radeon
+          intel-media-driver
+          libva-intel-driver
+          libva-mesa-driver
+          htop
+          fastfetch
+          nano
+          papirus-icon-theme
+          arc-gtk-theme
+          PKGLIST
+          mkdir -p airootfs/etc/sudoers.d
+          echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > airootfs/etc/sudoers.d/wheel-nopasswd
+          chmod 440 airootfs/etc/sudoers.d/wheel-nopasswd
+          mkdir -p airootfs/etc/sysctl.d
+          cat > airootfs/etc/sysctl.d/99-upl-performance.conf <<'SYSCTL'
+          vm.swappiness=80
+          vm.vfs_cache_pressure=50
+          vm.dirty_ratio=10
+          vm.dirty_background_ratio=5
+          vm.dirty_expire_centisecs=3000
+          vm.dirty_writeback_centisecs=500
+          vm.page-cluster=0
+          vm.min_free_kbytes=65536
+          kernel.kptr_restrict=2
+          kernel.unprivileged_bpf_disabled=1
+          kernel.yama.ptrace_scope=1
+          kernel.randomize_va_space=2
+          kernel.nmi_watchdog=0
+          net.core.bpf_jit_harden=2
+          fs.file-max=2097152
+          net.core.default_qdisc=cake
+          net.ipv4.tcp_congestion_control=bbr
+          net.ipv4.tcp_fastopen=3
+          net.ipv4.tcp_syncookies=1
+          net.ipv4.conf.all.rp_filter=1
+          net.ipv4.conf.default.rp_filter=1
+          SYSCTL
+          mkdir -p airootfs/etc/modules-load.d
+          echo "tcp_bbr" > airootfs/etc/modules-load.d/bbr.conf
+          mkdir -p airootfs/etc/systemd/zram-generator.conf.d
+          cat > airootfs/etc/systemd/zram-generator.conf.d/zram.conf <<'ZRAMCONF'
+          [zram0]
+          zram-size = min(ram / 2, 4096)
+          compression-algorithm = zstd
+          swap-priority = 100
+          ZRAMCONF
+          mkdir -p airootfs/etc/systemd/oomd.conf.d
+          cat > airootfs/etc/systemd/oomd.conf.d/99-upl.conf <<'OOMDCONF'
+          [OOM]
+          DefaultMemoryPressureDurationSec=20s
+          SwapUsedLimit=90%
+          DefaultMemoryPressureLimit=60%
+          OOMDCONF
+          mkdir -p airootfs/etc/udev/rules.d
+          cat > airootfs/etc/udev/rules.d/60-ioschedulers.rules <<'IOSCHEDULERS'
+          ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+          ACTION=="add|change", KERNEL=="sd*[!0-9]|sr*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+          ACTION=="add|change", KERNEL=="nvme*[!0-9]", ATTR{queue/scheduler}="none"
+          IOSCHEDULERS
+          mkdir -p airootfs/etc/systemd/journald.conf.d
+          cat > airootfs/etc/systemd/journald.conf.d/limit-size.conf <<'JEOF'
+          [Journal]
+          SystemMaxUse=50M
+          RuntimeMaxUse=50M
+          JEOF
+          mkdir -p airootfs/etc/systemd/system.conf.d
+          cat > airootfs/etc/systemd/system.conf.d/startup-timeout.conf <<'SEOF'
+          [Manager]
+          DefaultTimeoutStartSec=10s
+          DefaultTimeoutStopSec=10s
+          SEOF
+          mkdir -p airootfs/etc/lightdm
+          cat > airootfs/etc/lightdm/lightdm.conf <<'LIGHTDMCONF'
+          [Seat:*]
+          autologin-user=arch
+          autologin-user-timeout=0
+          autologin-session=xfce
+          LIGHTDMCONF
+          cat > airootfs/etc/lightdm/lightdm-gtk-greeter.conf <<'GREETERCONF'
+          [greeter]
+          background=#1a1a2e
+          theme-name=Arc-Dark
+          icon-theme-name=Papirus-Dark
+          font-name=IBM Plex Sans 10
+          clock-format=%H:%M
+          indicators=~host;~spacer;~session;~a11y;~power
+          GREETERCONF
+          enable_service() {
+              local svc="$1" tgt="$2"
+              mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
+              ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
+          }
+          enable_service lightdm.service display-manager.service
+          enable_service NetworkManager.service multi-user.target
+          enable_service ufw.service multi-user.target
+          enable_service apparmor.service multi-user.target
+          enable_service ananicy-cpp.service multi-user.target
+          enable_service power-profiles-daemon.service multi-user.target
+          enable_service systemd-oomd.service multi-user.target
+          mkdir -p airootfs/usr/local/bin
+          PART1
+
+      - name: Create build script 2/3 — diagnostic GUI
+        run: |
+          cat >> ${{ github.workspace }}/build.sh <<'PART2'
+          cat > airootfs/usr/local/bin/upl-diag-gui.sh <<'DIAGMENU'
+          #!/bin/bash
+          REPORT_DIR="$HOME/reports"
+          mkdir -p "$REPORT_DIR"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          OUT="$REPORT_DIR/rapport_complet_$TIMESTAMP.txt"
+          YAD_RESULT=$(yad --center --borders=10 \
+              --title="Diagnostic Matériel" \
+              --text="Sélectionnez les tests à exécuter :" \
+              --form \
+              --field="CPU (Processeur):CHK"      TRUE  \
+              --field="RAM (Mémoire):CHK"          TRUE  \
+              --field="Stockage (Disques):CHK"     TRUE  \
+              --field="GPU (Carte graphique):CHK"  TRUE  \
+              --field="Audio (Son):CHK"            FALSE \
+              --field="Réseau (Connectivité):CHK"  TRUE  \
+              --field="Batterie (Portable):CHK"    FALSE \
+              --field="Capteurs (Température):CHK" TRUE  \
+              --field="Infos Système (Aperçu):CHK" TRUE  \
+              2>/dev/null) || exit 0
+          IFS='|' read -r DO_CPU DO_RAM DO_DISK DO_GPU DO_AUDIO \
+                           DO_NET DO_BAT DO_SENSORS DO_SYS _ <<< "$YAD_RESULT"
+          echo "=== Rapport de Diagnostic Matériel - $(date) ===" | tee "$OUT"
+          [ "$DO_CPU"     = "TRUE" ] && { echo -e "\n=== Informations CPU ===" | tee -a "$OUT"; lscpu | tee -a "$OUT"; echo "Test de stress de 20 secondes..." | tee -a "$OUT"; stress-ng --cpu 0 --timeout 20 --metrics-brief 2>&1 | tee -a "$OUT"; }
+          [ "$DO_RAM"     = "TRUE" ] && { echo -e "\n=== Informations Mémoire ===" | tee -a "$OUT"; free -h | tee -a "$OUT"; echo "Test de 100 Mo de mémoire..." | tee -a "$OUT"; memtester 100M 1 2>&1 | tee -a "$OUT"; }
+          [ "$DO_DISK"    = "TRUE" ] && { echo -e "\n=== Informations Stockage ===" | tee -a "$OUT"; lsblk | tee -a "$OUT"; for disk in $(lsblk -dno NAME,TYPE | grep disk | awk '{print $1}'); do smartctl -a "/dev/$disk" 2>&1 | tee -a "$OUT" || true; done; }
+          [ "$DO_GPU"     = "TRUE" ] && { echo -e "\n=== Informations GPU ===" | tee -a "$OUT"; lspci | grep -i vga | tee -a "$OUT"; glxinfo 2>/dev/null | grep -i "renderer\|version" | tee -a "$OUT" || echo "glxinfo non disponible" | tee -a "$OUT"; }
+          [ "$DO_AUDIO"   = "TRUE" ] && { echo -e "\n=== Périphériques Audio ===" | tee -a "$OUT"; aplay -l | tee -a "$OUT"; }
+          [ "$DO_NET"     = "TRUE" ] && { echo -e "\n=== Informations Réseau ===" | tee -a "$OUT"; ip a | tee -a "$OUT"; ping -c 3 1.1.1.1 | tee -a "$OUT"; }
+          [ "$DO_BAT"     = "TRUE" ] && { echo -e "\n=== État de la Batterie ===" | tee -a "$OUT"; upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null | tee -a "$OUT" || echo "Pas de batterie (PC de bureau)" | tee -a "$OUT"; }
+          [ "$DO_SENSORS" = "TRUE" ] && { echo -e "\n=== Capteurs de Température ===" | tee -a "$OUT"; sensors 2>/dev/null | tee -a "$OUT" || echo "Capteurs non détectés" | tee -a "$OUT"; }
+          [ "$DO_SYS"     = "TRUE" ] && { echo -e "\n=== Aperçu du Système ===" | tee -a "$OUT"; fastfetch --stdout 2>/dev/null | tee -a "$OUT" || true; hwinfo --short 2>/dev/null | tee -a "$OUT" || true; }
+          yad --center --title="Diagnostic Terminé" \
+              --text="Rapport enregistré dans :\n$OUT" \
+              --button="Voir le rapport:0" --button="Fermer:1" 2>/dev/null
+          if [ $? -eq 0 ]; then xfce4-terminal -e "less $OUT" --hold & fi
+          DIAGMENU
+          chmod +x airootfs/usr/local/bin/upl-diag-gui.sh
+          mkdir -p airootfs/etc/xdg/autostart
+          cat > airootfs/etc/xdg/autostart/upl-diag.desktop <<'AUTOSTART'
+          [Desktop Entry]
+          Type=Application
+          Name=Outil de Diagnostic UPL
+          Exec=/usr/local/bin/upl-diag-gui.sh
+          Icon=system-software-install
+          Categories=System;
+          X-GNOME-Autostart-enabled=true
+          NoDisplay=false
+          AUTOSTART
+          PART2
+
+      - name: Create build script 3/3 — airootfs + build
+        run: |
+          cat >> ${{ github.workspace }}/build.sh <<'PART3'
+          cat > "$PROFILE_DIR/airootfs.sh" <<'CUSTOMIZE'
+          #!/bin/bash
+          set -euo pipefail
+          for grp in wheel audio video network storage autologin; do
+              groupadd -f "$grp"
+          done
+          id -u arch &>/dev/null || useradd -m -G wheel,audio,video,network,storage,autologin -s /bin/bash arch
+          echo "arch:arch" | chpasswd
+          cp -r /etc/skel/. /home/arch/ 2>/dev/null || true
+          chown -R arch:arch /home/arch
+          chmod 750 /home/arch
+          echo "KEYMAP=fr" > /etc/vconsole.conf
+          mkdir -p /etc/X11/xorg.conf.d
+          cat > /etc/X11/xorg.conf.d/00-keyboard.conf <<'XKB'
+          Section "InputClass"
+              Identifier "system-keyboard"
+              MatchIsKeyboard "on"
+              Option "XkbLayout" "fr"
+          EndSection
+          XKB
+          ufw default deny incoming
+          ufw default allow outgoing
+          ufw --force enable
+          XFCE_CONF="/home/arch/.config/xfce4/xfconf/xfce-perchannel-xml"
+          mkdir -p "$XFCE_CONF"
+          cat > "$XFCE_CONF/xsettings.xml" <<'XSET'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xsettings" version="1.0">
+            <property name="Net" type="empty">
+              <property name="ThemeName"     type="string" value="Arc-Dark"/>
+              <property name="IconThemeName" type="string" value="Papirus-Dark"/>
+            </property>
+            <property name="Gtk" type="empty">
+              <property name="FontName"          type="string" value="IBM Plex Sans 10"/>
+              <property name="MonospaceFontName" type="string" value="IBM Plex Mono 10"/>
+            </property>
+          </channel>
+          XSET
+          cat > "$XFCE_CONF/xfwm4.xml" <<'XFWM'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xfwm4" version="1.0">
+            <property name="general" type="empty">
+              <property name="theme"           type="string" value="Arc-Dark"/>
+              <property name="title_font"      type="string" value="IBM Plex Sans Bold 10"/>
+              <property name="button_layout"   type="string" value="O|HMC"/>
+              <property name="use_compositing" type="bool"   value="true"/>
+            </property>
+          </channel>
+          XFWM
+          cat > "$XFCE_CONF/xfce4-panel.xml" <<'PANELXML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xfce4-panel" version="1.0">
+            <property name="configver" type="int" value="2"/>
+            <property name="panels" type="array">
+              <value type="int" value="1"/>
+              <property name="panel-1" type="empty">
+                <property name="position"        type="string" value="p=6;x=0;y=0"/>
+                <property name="length"          type="uint"   value="100"/>
+                <property name="position-locked" type="bool"   value="true"/>
+                <property name="size"            type="uint"   value="32"/>
+                <property name="plugin-ids"      type="array">
+                  <value type="int" value="1"/>
+                  <value type="int" value="2"/>
+                  <value type="int" value="3"/>
+                  <value type="int" value="4"/>
+                  <value type="int" value="5"/>
+                  <value type="int" value="6"/>
+                  <value type="int" value="7"/>
+                </property>
+              </property>
+            </property>
+            <property name="plugins" type="empty">
+              <property name="plugin-1" type="string" value="whiskermenu"/>
+              <property name="plugin-2" type="string" value="separator">
+                <property name="style" type="uint" value="0"/>
+              </property>
+              <property name="plugin-3" type="string" value="tasklist">
+                <property name="show-labels" type="bool" value="true"/>
+                <property name="grouping"    type="uint" value="0"/>
+              </property>
+              <property name="plugin-4" type="string" value="separator">
+                <property name="expand" type="bool" value="true"/>
+                <property name="style"  type="uint" value="0"/>
+              </property>
+              <property name="plugin-5" type="string" value="systray">
+                <property name="size-max" type="uint" value="22"/>
+              </property>
+              <property name="plugin-6" type="string" value="separator">
+                <property name="style" type="uint" value="0"/>
+              </property>
+              <property name="plugin-7" type="string" value="clock">
+                <property name="digital-format" type="string" value="%H:%M  %d/%m/%Y"/>
+              </property>
+            </property>
+          </channel>
+          PANELXML
+          cat > "$XFCE_CONF/xfce4-screensaver.xml" <<'SSXML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xfce4-screensaver" version="1.0">
+            <property name="saver" type="empty">
+              <property name="enabled" type="bool" value="false"/>
+            </property>
+            <property name="lock" type="empty">
+              <property name="enabled" type="bool" value="false"/>
+            </property>
+          </channel>
+          SSXML
+          cat > "$XFCE_CONF/xfce4-power-manager.xml" <<'PMXML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xfce4-power-manager" version="1.0">
+            <property name="xfce4-power-manager" type="empty">
+              <property name="blank-on-ac"      type="int"  value="0"/>
+              <property name="dpms-on-ac-off"   type="int"  value="0"/>
+              <property name="dpms-on-ac-sleep" type="int"  value="0"/>
+              <property name="dpms-enabled"     type="bool" value="false"/>
+            </property>
+          </channel>
+          PMXML
+          mkdir -p /home/arch/.config/xfce4/terminal
+          cat > /home/arch/.config/xfce4/terminal/terminalrc <<'TERMRC'
+          [Configuration]
+          FontName=IBM Plex Mono 11
+          ColorForeground=#d3d7cf
+          ColorBackground=#1e2029
+          ColorCursor=#d3d7cf
+          MiscShowUnsafePasteDialog=FALSE
+          ScrollingLines=5000
+          TERMRC
+          mkdir -p /home/arch/.config/xfce4/panel
+          cat > /home/arch/.config/xfce4/panel/whiskermenu-1.rc <<'WHISKER'
+          button-icon=system-search
+          button-title-visible=false
+          button-icon-visible=true
+          item-icon-size=2
+          launcher-show-name=true
+          launcher-show-description=false
+          profile-shape=0
+          recent-items-max=10
+          show-category-name=true
+          WHISKER
+          chown -R arch:arch /home/arch/.config
+          CUSTOMIZE
+          chmod +x "$PROFILE_DIR/airootfs.sh"
+          sed -i '/^squashfs_options=/d; /^airootfs_image_tool_options=/d' profiledef.sh
+          echo "airootfs_image_tool_options=('-comp' 'zstd' '-Xcompression-level' '3')" >> profiledef.sh
+          echo "[*] Début de mkarchiso..."
+          mkarchiso -v -w "$WORKDIR/archiso-tmp" -o "$WORKDIR/out" "$PROFILE_DIR"
+          echo "[*] Construction terminée ✅"
+          rm -rf "$WORKDIR/archiso-tmp"
+          chown -R 1000:1000 "$WORKDIR/out" 2>/dev/null || true
+          PART3
+
+      - name: Validate build script
+        run: |
+          test -s ${{ github.workspace }}/build.sh || exit 1
+          chmod +x ${{ github.workspace }}/build.sh
+          bash -n ${{ github.workspace }}/build.sh
+
+      - name: Run build inside container
+        run: |
+          mkdir -p ${{ github.workspace }}/pacman-cache
+          docker run --rm --privileged \
+            -e HOME=/workspace \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            archlinux:latest \
+            /workspace/build.sh
+
+      - name: Fix permissions
+        run: |
+          sudo chown -R "$(whoami)" \
+              ${{ github.workspace }}/pacman-cache \
+              ${{ github.workspace }}/upl-diag-build/out || true
+
+      - name: Verify ISO
+        run: |
+          ls -lah ${{ github.workspace }}/upl-diag-build/out/
+          test -f ${{ github.workspace }}/upl-diag-build/out/*.iso || exit 1
+
+      - name: Generate checksums
+        run: |
+          cd ${{ github.workspace }}/upl-diag-build/out
+          sha256sum *.iso > checksums.txt
+
+      - name: Upload ISO as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPL-Diag-XFCE-FR-Enhanced
+          path: |
+            ${{ github.workspace }}/upl-diag-build/out/*.iso
+            ${{ github.workspace }}/upl-diag-build/out/checksums.txt
+          retention-days: 7
+          compression-level: 0
