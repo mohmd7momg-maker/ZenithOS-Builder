@@ -50,9 +50,7 @@ jobs:
           rm -rf "$PROFILE_DIR"
           cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
           cd "$PROFILE_DIR"
-          # ----- حذف قائمة الحزم الافتراضية بالكامل -----
           echo -n > packages.x86_64
-          # --------------------------------------------
           sed -i '/^linux$/d; /^linux-headers$/d' packages.x86_64
           for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
               [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
@@ -87,6 +85,11 @@ jobs:
           sof-firmware
           alsa-firmware
           alsa-ucm-conf
+          syslinux
+          memtest86+
+          memtest86+-efi
+          edk2-shell
+          arch-install-scripts
           pciutils
           usbutils
           dmidecode
@@ -246,10 +249,8 @@ jobs:
               mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
               ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
           }
-          # --- إصلاح مدير العرض (LightDM) ---
           mkdir -p airootfs/etc/systemd/system
           ln -sf /usr/lib/systemd/system/lightdm.service airootfs/etc/systemd/system/display-manager.service
-          # ---------------------------------
           enable_service NetworkManager.service multi-user.target
           enable_service ufw.service multi-user.target
           enable_service apparmor.service multi-user.target
