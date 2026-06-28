@@ -51,6 +51,15 @@ jobs:
           cp -r /usr/share/archiso/configs/releng/ "$PROFILE_DIR"
           cd "$PROFILE_DIR"
           echo -n > packages.x86_64
+          # ----- تعديل نصوص الإقلاع (GRUB و Syslinux) -----
+          for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
+              if [ -f "$cfg" ]; then
+                  sed -i 's/Arch Linux install medium (x86_64)/UPL-Diag Live/g' "$cfg"
+                  sed -i 's/Arch Linux install medium (x86_64, with speech)/UPL-Diag Live (Accessibility)/g' "$cfg"
+                  sed -i 's/Arch Linux install medium (x86_64, copy to RAM)/UPL-Diag Live (Copy to RAM)/g' "$cfg"
+              fi
+          done
+          # -------------------------------------------------
           for cfg in grub/grub.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_sys64.cfg; do
               [ -f "$cfg" ] && sed -i 's/\bquiet\b/quiet lsm=landlock,lockdown,yama,apparmor,bpf nowatchdog/' "$cfg" || true
           done
@@ -261,9 +270,11 @@ jobs:
               mkdir -p "airootfs/etc/systemd/system/${tgt}.wants"
               ln -sf "/usr/lib/systemd/system/${svc}" "airootfs/etc/systemd/system/${tgt}.wants/${svc}"
           }
+          # --- LightDM: symlink (primary) + systemctl enable (fallback) ---
           mkdir -p airootfs/etc/systemd/system
           ln -sf /usr/lib/systemd/system/lightdm.service airootfs/etc/systemd/system/display-manager.service
           ln -sf /usr/lib/systemd/system/graphical.target airootfs/etc/systemd/system/default.target
+          # ---------------------------------------------------------------
           ln -sf /dev/null airootfs/etc/systemd/system/NetworkManager-wait-online.service
           enable_service NetworkManager.service multi-user.target
           enable_service ufw.service multi-user.target
@@ -475,6 +486,8 @@ jobs:
           show-category-name=true
           WHISKER
           chown -R arch:arch /home/arch/.config
+          # --- LightDM: symlink (primary) + systemctl enable (fallback) ---
+          systemctl enable lightdm
           CUSTOMIZE
           chmod +x "$PROFILE_DIR/airootfs.sh"
           sed -i '/^squashfs_options=/d; /^airootfs_image_tool_options=/d' profiledef.sh
